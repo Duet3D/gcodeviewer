@@ -1,4 +1,4 @@
-import ProcessorProperties from '../processorProperties'
+import ProcessorProperties from '../processorproperties'
 import * as GCodeCommands from '.'
 import { Base, Comment, Move } from '../GCodeLines'
 
@@ -7,8 +7,6 @@ const commandRegex = /[GMT]+[0-9.]+/gi
 const fastGCodeRegex = /^([GMT])(\d{1,3})/i
 
 // Command type detection for fast parsing
-const GCODE_COMMANDS = new Set(['G0', 'G00', 'G1', 'G01', 'G2', 'G02', 'G3', 'G03', 'G90', 'G91'])
-const MCODE_COMMANDS = new Set(['M3', 'M4', 'M5', 'M104', 'M109', 'M140', 'M190', 'M600'])
 
 // Ultra-fast parser for the most common G0/G1 patterns
 function parseG0G1Fast(props: ProcessorProperties, line: string): Base | null {
@@ -161,8 +159,7 @@ function parseNumberFast(line: string, startIndex: number): [number, number] {
 }
 
 export function ProcessLine(props: ProcessorProperties, line: string): Base {
-   let lineLength = line.length
-   let workingLine = line.trim()
+   const workingLine = line.trim()
    
    // Fast path for comments and empty lines
    if (workingLine.length === 0 || workingLine.startsWith(';')) {

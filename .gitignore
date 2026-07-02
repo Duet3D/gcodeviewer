@@ -11,3 +11,10 @@ target/
 Cargo.lock
 **/*.rs.bk
 *.pdb
+
+# wasm-pack output
+WASM_FileProcessor/pkg/
+WASM_FileProcessor/pkg-node/
+
+# IDE state
+.idea/

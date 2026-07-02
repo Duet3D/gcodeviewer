@@ -1,70 +1,42 @@
 # WASM Build Instructions
 
-This project includes a high-performance Rust/WASM G-code processor for faster file parsing and rendering.
+This project includes a Rust/WASM G-code processor for faster file parsing and render buffer generation.
 
 ## Prerequisites
 
-1. **Rust**: Install from https://rustup.rs/
-2. **wasm-pack**: Install with `cargo install wasm-pack`
+1. **Rust** with the `wasm32-unknown-unknown` target (via https://rustup.rs/, or on Arch Linux the `rust` + `rust-wasm` packages)
+2. **wasm-pack**: `cargo install wasm-pack`, or your distribution's package
 
-## Building WASM
+## Building
 
-### Option 1: Use the batch script (Windows)
+`npm run build` (and `npm run dev`) rebuild the WASM package automatically whenever a file in
+`WASM_FileProcessor/src/` or `Cargo.toml` is newer than the generated `pkg/` output, so no manual
+step is needed. Machines without wasm-pack can still build the library as long as a current `pkg/`
+exists.
+
+Manual builds are still available:
+
 ```bash
-# Run the batch script
-./build-wasm.bat
-
-# Or PowerShell version
-./build-wasm.ps1
-```
-
-### Option 2: Use npm scripts
-```bash
-# Build WASM only
+# Force a WASM build (web target, used by the library)
 npm run build:wasm
 
 # Build WASM for Node.js (testing)
-npm run build:wasm:node  
-
-# Build WASM and main library
-npm run build:all
-```
-
-### Option 3: Manual build
-```bash
-cd WASM_FileProcessor
-wasm-pack build --target web --out-dir pkg --release
-cd ..
+npm run build:wasm:node
 ```
 
 ## Generated Files
 
-After building, the following files will be generated:
-
-- **`WASM_FileProcessor/pkg/`** - Web target (used by the TypeScript library)
+- **`WASM_FileProcessor/pkg/`** - web target, imported by the TypeScript library (gitignored)
   - `gcode_file_processor.js` - JavaScript bindings
-  - `gcode_file_processor_bg.wasm` - Compiled WASM binary
+  - `gcode_file_processor_bg.wasm` - compiled WASM binary
   - `gcode_file_processor.d.ts` - TypeScript definitions
-  
-- **`WASM_FileProcessor/pkg-node/`** - Node.js target (for testing)
+- **`WASM_FileProcessor/pkg-node/`** - Node.js target for testing (gitignored)
 
 ## Integration
 
-The WASM module is automatically imported by the TypeScript code in:
-- `src/wasmprocessor.ts` - Main WASM processor wrapper
-- `src/processor.ts` - Falls back to WASM when available
+- `src/wasmprocessor.ts` wraps the wasm-bindgen module; `src/processor.ts` uses it when `enableWasmProcessing()` has been called and falls back to the TypeScript parser otherwise.
+- The library build inlines the .wasm binary as a base64 data URI, so consumers need no separate asset handling.
 
-## Performance Benefits
+## Coordinate System
 
-The WASM processor provides:
-- **60-80% faster** file parsing
-- **40-50% memory reduction** through optimized buffer management  
-- **70% faster** initial rendering with direct buffer generation
-- Non-blocking UI during large file processing
-
-## Coordinate System Fix
-
-The WASM implementation correctly handles coordinate transformation:
-- **3D Printing**: X-right, Y-forward, Z-up
-- **Babylon.js**: X-right, Y-up, Z-forward
-- **Conversion**: Y↔Z coordinates are swapped in the WASM render matrix generation
+G-code is Z-up, Babylon.js is Y-up. Y and Z are swapped at parse time (in both the TypeScript and Rust parsers), so all buffers produced by the WASM module are already in Babylon space.

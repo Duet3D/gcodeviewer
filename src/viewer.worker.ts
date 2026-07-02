@@ -8,10 +8,6 @@ self.viewer = null //Main instance of the viewer.
 self.addEventListener('message', async (message) => {
    //console.info('Message received from main thread', message.data)
 
-   let setTimeoutPromise = (timeout) =>
-      new Promise((resolve) => {
-         setTimeout(resolve, timeout)
-      })
 
    switch (message.data.type) {
       case 'init':
@@ -27,8 +23,12 @@ self.addEventListener('message', async (message) => {
             addEventListener: (event, fn, opt) => {
                self.viewer.bindHandler('document', event, fn, opt)
             },
-            // Uses to detect wheel event like at src/Inputs/scene.inputManager.ts:797
-            createElement: function () {
+            // Babylon probes document.createElement for wheel support and uses it to create 2D canvases
+            // for DynamicTexture, so canvas requests must return a real OffscreenCanvas
+            createElement: function (tagName) {
+               if (tagName === 'canvas') {
+                  return new OffscreenCanvas(64, 64)
+               }
                return { onwheel: true }
             },
             elementFromPoint: function () {
@@ -109,6 +109,54 @@ self.addEventListener('message', async (message) => {
          break
       case 'stopNozzleAnimation':
          self.viewer.processor.stopNozzleAnimation()
+         break
+      case 'showViewBox':
+         self.viewer.showViewBox(message.data.visible)
+         break
+      case 'setCameraDirection':
+         self.viewer.setCameraDirection(message.data.direction)
+         break
+      case 'resetCamera':
+         self.viewer.resetCamera()
+         break
+      case 'setBackgroundColor':
+         self.viewer.setBackgroundColor(message.data.color)
+         break
+      case 'setCameraInertia':
+         self.viewer.setCameraInertia(message.data.enabled)
+         break
+      case 'setZClipPlane':
+         self.viewer.setZClipPlane(message.data.top, message.data.bottom)
+         break
+      case 'setTools':
+         self.viewer.processor.setTools(message.data.tools)
+         break
+      case 'setBuildVolume':
+         self.viewer.setBuildVolume(message.data.volume)
+         break
+      case 'setBedRenderMode':
+         self.viewer.setBedRenderMode(message.data.mode)
+         break
+      case 'setBedColor':
+         self.viewer.setBedColor(message.data.color)
+         break
+      case 'setDeltaBed':
+         self.viewer.setDeltaBed(message.data.isDelta)
+         break
+      case 'showBed':
+         self.viewer.showBed(message.data.visible)
+         break
+      case 'showAxes':
+         self.viewer.showAxes(message.data.visible)
+         break
+      case 'loadObjectBoundaries':
+         self.viewer.loadObjectBoundaries(message.data.objects)
+         break
+      case 'showObjectSelection':
+         self.viewer.showObjectSelection(message.data.visible)
+         break
+      case 'showObjectLabels':
+         self.viewer.showObjectLabels(message.data.visible)
          break
       case 'enableWasmProcessing':
          try {

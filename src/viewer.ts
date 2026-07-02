@@ -1,9 +1,10 @@
 import { Engine } from '@babylonjs/core/Engines/engine'
-import { Scene, ScenePerformancePriority } from '@babylonjs/core/scene'
+import { Scene } from '@babylonjs/core/scene'
 import { Color4, Color3 } from '@babylonjs/core/Maths/math.color'
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera'
+import { ArcRotateCameraKeyboardMoveInput } from '@babylonjs/core/Cameras/Inputs/arcRotateCameraKeyboardMoveInput'
 import { Light } from '@babylonjs/core/Lights/light'
-import { Vector3, Matrix } from '@babylonjs/core/Maths/math.vector'
+import { Vector3 } from '@babylonjs/core/Maths/math.vector'
 import { Mesh } from '@babylonjs/core/Meshes/mesh'
 import { PointLight } from '@babylonjs/core/Lights/pointLight'
 import { FlyCamera } from '@babylonjs/core/Cameras/flyCamera'
@@ -14,9 +15,13 @@ import '@babylonjs/core/Meshes/thinInstanceMesh'
 import '@babylonjs/core/Engines/Extensions/engine.query'
 import GPUPicker from './gpupicker'
 import { PointerEventTypes } from '@babylonjs/core/Events/pointerEvents'
+import { Plane } from '@babylonjs/core/Maths/math.plane'
+import ViewBox, { ViewBoxDirection } from './Renderables/viewbox'
+import Bed, { BuildVolume, RenderBedMode } from './Renderables/bed'
+import Axes from './Renderables/axes'
+import BuildObjects from './Renderables/buildobjects'
 import '@babylonjs/core/Rendering/'
 
-let ColorID = [0, 0, 0]
 export default class Viewer {
    scene: Scene | undefined
    engine: Engine | null = null
@@ -35,6 +40,12 @@ export default class Viewer {
    registeredEventHandlers = new Map<string, any>() //These are event handlers we want to bind to. Currently Canvas, Window, Document that we fake in the worker.
    worker: Worker
    processor: Processor = new Processor()
+   viewBox: ViewBox | null = null
+   bed: Bed | null = null
+   axes: Axes | null = null
+   buildObjects: BuildObjects | null = null
+   zTopClipValue: number | null = null
+   zBottomClipValue: number | null = null
    offscreen: boolean = true
    lastFrameUpdate: number = 0
    renderTimeout: number = 1000
@@ -65,12 +76,12 @@ export default class Viewer {
 
       this.setSizes(data.width, data.height)
 
-      //@ts-ignore getBoundingClientRect is not defined on offscreen canvas but necessary for babylonjs
+      //@ts-expect-error getBoundingClientRect is not defined on offscreen canvas but necessary for babylonjs
       this.offscreenCanvas.getBoundingClientRect = () => {
          return this.rect
       }
 
-      //@ts-ignore focus is not defined on offscreen canvas but necessary for babylonjs
+      //@ts-expect-error focus is not defined on offscreen canvas but necessary for babylonjs
       this.offscreenCanvas.focus = () => {
          this.worker.postMessage({
             type: 'canvasMethod',
@@ -90,9 +101,9 @@ export default class Viewer {
 
    setSizes(width, height) {
       if (this.offscreen) {
-         //@ts-ignore
+         //@ts-expect-error clientWidth is readonly on the canvas types but assignable on the faked worker-side canvas
          this.offscreenCanvas.clientWidth = width
-         //@ts-ignore
+         //@ts-expect-error clientHeight is readonly on the canvas types but assignable on the faked worker-side canvas
          this.offscreenCanvas.clientHeight = height
          this.offscreenCanvas.width = width
          this.offscreenCanvas.height = height
@@ -106,8 +117,7 @@ export default class Viewer {
       }
    }
 
-   async initEngine(useWebGPU = true) {
-      if (useWebGPU === undefined) useWebGPU = false
+   async initEngine() {
       console.info(`G-Code Viewer- Sindarius - 4 `)
 
       //this will use the offscreen rendering and web worker threads
@@ -155,9 +165,10 @@ export default class Viewer {
       this.orbitCamera.speed = 500
       this.orbitCamera.inertia = 0
       this.orbitCamera.panningInertia = 0
-      this.orbitCamera.inputs.attached.keyboard.angularSpeed = 0.05
-      this.orbitCamera.inputs.attached.keyboard.zoomingSensibility = 0.5
-      this.orbitCamera.inputs.attached.keyboard.panningSensibility = 0.5
+      const keyboardInput = this.orbitCamera.inputs.attached.keyboard as ArcRotateCameraKeyboardMoveInput
+      keyboardInput.angularSpeed = 0.05
+      keyboardInput.zoomingSensibility = 0.5
+      keyboardInput.panningSensibility = 0.5
       this.orbitCamera.angularSensibilityX = 200
       this.orbitCamera.angularSensibilityY = 200
       this.orbitCamera.panningSensibility = 2
@@ -167,6 +178,39 @@ export default class Viewer {
 
       this.pointLight.diffuse = new Color3(1, 1, 1)
       this.pointLight.specular = new Color3(1, 1, 1)
+
+      this.bed = new Bed(this.scene)
+      this.bed.registerClipIgnore = (mesh) => {
+         this.registerClipIgnore(mesh)
+      }
+      this.bed.buildBed()
+
+      this.axes = new Axes(this.scene)
+      this.axes.registerClipIgnore = (mesh) => {
+         this.registerClipIgnore(mesh)
+      }
+      this.axes.render()
+
+      this.buildObjects = new BuildObjects(this.scene)
+      this.buildObjects.getMaxHeight = () => {
+         return this.processor.processorProperties.maxHeight
+      }
+      this.buildObjects.registerClipIgnore = (mesh) => {
+         this.registerClipIgnore(mesh)
+      }
+      this.buildObjects.objectCallback = (metadata) => {
+         this.worker.postMessage({ type: 'objectSelected', object: metadata })
+      }
+      this.buildObjects.labelCallback = (name) => {
+         this.worker.postMessage({ type: 'objectLabel', name: name })
+      }
+
+      this.viewBox = new ViewBox(this.engine, this.orbitCamera)
+      this.viewBox.onDirectionSelected = (direction) => {
+         this.setCameraDirection(direction)
+      }
+
+      this.resetCamera()
 
       this.scene.render()
 
@@ -191,14 +235,20 @@ export default class Viewer {
          }
          
          this.scene?.render()
+         this.viewBox?.render()
          this.lastFrameUpdate = Date.now()
       })
 
       this.scene.onPointerObservable.add((pointerInfo) => {
          if (pointerInfo.type == PointerEventTypes.POINTERTAP) {
+            const direction = this.viewBox?.pick(this.scene.pointerX, this.scene.pointerY)
+            if (direction) {
+               this.setCameraDirection(direction)
+               return
+            }
             try {
                if (this.processor.focusedColorId > 10) {
-                  var pos = this.processor.gCodeLines[this.processor.focusedColorId].filePosition
+                  const pos = this.processor.gCodeLines[this.processor.focusedColorId].filePosition
                   this.processor.updateFilePosition(pos)
                   this.worker.postMessage({ type: 'positionupdate', position: pos })
                }
@@ -207,6 +257,141 @@ export default class Viewer {
       })
 
       //this.loadInstrumentation()
+   }
+
+   // Snap the orbit camera so it views the bed from the given direction (viewbox face/edge/corner metadata)
+   setCameraDirection(direction: ViewBoxDirection) {
+      if (!this.orbitCamera || !this.bed) {
+         return
+      }
+      const look = new Vector3(direction.x, direction.y, direction.z)
+      if (look.lengthSquared() === 0) {
+         return
+      }
+      look.normalize()
+      const bedCenter = this.bed.getCenter()
+      const bedSize = this.bed.getSize()
+      // Straight-on views need more distance than corner views to keep the bed fully in frame
+      const zeroAxes = (direction.x === 0 ? 1 : 0) + (direction.y === 0 ? 1 : 0) + (direction.z === 0 ? 1 : 0)
+      const distance = Math.max(bedSize.x, bedSize.y, bedSize.z) * (zeroAxes === 2 ? 1.75 : 1.35)
+      const target = new Vector3(bedCenter.x, bedCenter.z, bedCenter.y)
+      this.orbitCamera.setTarget(target)
+      this.orbitCamera.setPosition(target.subtract(look.scale(distance)))
+      if (direction.x === 0 && direction.z === 0) {
+         this.orbitCamera.alpha = (3 * Math.PI) / 2
+      }
+      this.scene?.render(true)
+   }
+
+   resetCamera() {
+      if (!this.orbitCamera || !this.bed) {
+         return
+      }
+      const bedCenter = this.bed.getCenter()
+      const bedSize = this.bed.getSize()
+      this.orbitCamera.setTarget(new Vector3(bedCenter.x, -2, bedCenter.y))
+      if (this.bed.isDelta) {
+         this.orbitCamera.radius = bedCenter.x
+         this.orbitCamera.setPosition(new Vector3(-bedSize.x, bedSize.z, -bedSize.x))
+      } else {
+         this.orbitCamera.radius = bedCenter.x * 3
+         this.orbitCamera.setPosition(new Vector3(-bedSize.x / 2, bedSize.z, -bedSize.y / 2))
+      }
+      this.scene?.render(true)
+   }
+
+   // Excluded meshes (bed, axes, object boundaries) temporarily lift the clip planes while they render
+   registerClipIgnore(mesh) {
+      if (!mesh) {
+         return
+      }
+      mesh.onBeforeRenderObservable.add(() => {
+         this.scene.clipPlane = null
+         this.scene.clipPlane2 = null
+      })
+      mesh.onAfterRenderObservable.add(() => {
+         if (this.zTopClipValue !== null && this.zBottomClipValue !== null) {
+            this.scene.clipPlane = new Plane(0, 1, 0, this.zTopClipValue)
+            this.scene.clipPlane2 = new Plane(0, -1, 0, this.zBottomClipValue)
+         }
+      })
+   }
+
+   showViewBox(visible: boolean) {
+      this.viewBox?.show(visible)
+   }
+
+   setBackgroundColor(hexColor: string) {
+      if (this.scene) {
+         this.scene.clearColor = Color3.FromHexString(hexColor.substring(0, 7)).toColor4(1)
+      }
+   }
+
+   setCameraInertia(enabled: boolean) {
+      if (this.orbitCamera) {
+         this.orbitCamera.inertia = enabled ? 0.9 : 0
+         this.orbitCamera.panningInertia = enabled ? 0.9 : 0
+      }
+   }
+
+   // Clip the model between two heights. Values are in printer Z, which maps to Babylon y
+   setZClipPlane(top: number, bottom: number) {
+      if (!this.scene) {
+         return
+      }
+      if (top === null || top === undefined) {
+         this.zTopClipValue = null
+         this.zBottomClipValue = null
+         this.scene.clipPlane = null
+         this.scene.clipPlane2 = null
+      } else {
+         this.zTopClipValue = bottom > top ? bottom + 1 : -top
+         this.zBottomClipValue = bottom
+         this.scene.clipPlane = new Plane(0, 1, 0, this.zTopClipValue)
+         this.scene.clipPlane2 = new Plane(0, -1, 0, this.zBottomClipValue)
+      }
+      this.scene.render(true)
+   }
+
+   setBuildVolume(volume: BuildVolume) {
+      if (this.bed) {
+         this.bed.buildVolume = volume
+         this.bed.commitBedSize()
+         this.axes?.render()
+         this.scene?.render(true)
+      }
+   }
+
+   setBedRenderMode(mode: RenderBedMode) {
+      this.bed?.setRenderMode(mode)
+   }
+
+   setBedColor(color: string) {
+      this.bed?.setBedColor(color)
+   }
+
+   setDeltaBed(isDelta: boolean) {
+      this.bed?.setDelta(isDelta)
+   }
+
+   showBed(visible: boolean) {
+      this.bed?.setVisibility(visible)
+   }
+
+   showAxes(visible: boolean) {
+      this.axes?.show(visible)
+   }
+
+   loadObjectBoundaries(objects: any[]) {
+      this.buildObjects?.loadObjectBoundaries(objects)
+   }
+
+   showObjectSelection(visible: boolean) {
+      this.buildObjects?.showObjectSelection(visible)
+   }
+
+   showObjectLabels(visible: boolean) {
+      this.buildObjects?.showLabels(visible)
    }
 
    isArcRotateCameraStopped(camera) {
@@ -220,11 +405,11 @@ export default class Viewer {
    }
 
    loadInstrumentation() {
-      let inst = new EngineInstrumentation(this.engine)
+      const inst = new EngineInstrumentation(this.engine)
       inst.captureGPUFrameTime = true
       inst.captureShaderCompilationTime = true
 
-      let sceneInst = new SceneInstrumentation(this.scene)
+      const sceneInst = new SceneInstrumentation(this.scene)
 
       let timer = Date.now()
       this.scene.registerAfterRender(() => {
@@ -249,7 +434,7 @@ export default class Viewer {
 
    //Send message to the main thread for events we want to bind to.
    bindHandler(targetName, eventName, fn, opt) {
-      let id = `${targetName}${eventName}`
+      const id = `${targetName}${eventName}`
       this.registeredEventHandlers.set(id, fn)
 
       this.worker.postMessage({

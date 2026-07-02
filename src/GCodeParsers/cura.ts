@@ -21,7 +21,7 @@ export default class Cura extends SlicerBase {
    processComment(comment: string) {
       if (comment.startsWith(';TYPE:')) {
          this.feature = comment.substring(6).trim()
-         let feature = this.featureList[this.feature]
+         const feature = this.featureList[this.feature]
          if (feature) {
             this.currentFeatureColor = feature.color
             this.currentIsPerimeter = feature.perimeter

@@ -6,7 +6,7 @@ import Props from '../processorproperties'
 const tokenList = /(?=[GXYZEFUVAB])/
 
 export default function (props: Props, line: string): Base {
-   let move = new Move(props, line)
+   const move = new Move(props, line)
    move.tool = props.currentTool.toolNumber
    props.currentPosition.toArray(move.start)
 
@@ -17,10 +17,10 @@ export default function (props: Props, line: string): Base {
    if (props.zBelt) tokens.reverse()
 
    for (let idx = 0; idx < tokens.length; idx++) {
-      let token = tokens[idx]
+      const token = tokens[idx]
       const firstChar = token[0].toUpperCase()
       switch (firstChar) {
-         case 'G':
+         case 'G': {
             const upperToken = token.toUpperCase()
             if (upperToken == 'G53') forceAbsolute = true
             if (upperToken == 'G1' || upperToken == 'G01') {
@@ -29,6 +29,7 @@ export default function (props: Props, line: string): Base {
                move.extruding = props.cncMode
             }
             break
+         }
          case 'X':
             if (props.zBelt) {
                props.currentPosition.x = Number(token.substring(1))

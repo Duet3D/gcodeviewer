@@ -8,11 +8,11 @@ const tokenList = /(?=[GXYZIJKFRE])/
 //Reminder Add G53 check
 
 export default function (props: Props, line: string): Base {
-   let move = new ArcMove(props, line)
+   const move = new ArcMove(props, line)
 
    move.feedRate = props.CurrentFeedRate
 
-   let tokens = line.split(tokenList)
+   const tokens = line.split(tokenList)
 
    move.extruding = line.indexOf('E') > 0 || props.cncMode //|| this.g1AsExtrusion //Treat as an extrusion in cnc mode
 

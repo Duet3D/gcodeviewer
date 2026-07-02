@@ -1,7 +1,7 @@
 import { Scene } from '@babylonjs/core/scene'
 import { CustomMaterial } from '@babylonjs/materials/custom/customMaterial'
 import { UniformBuffer } from '@babylonjs/core/Materials/uniformBuffer'
-import { Color3, Color4 } from '@babylonjs/core/Maths/math.color'
+import { Color3 } from '@babylonjs/core/Maths/math.color'
 import { Vector4, Vector3 } from '@babylonjs/core/Maths/math.vector'
 
 export default class ModelMaterial {
@@ -191,7 +191,7 @@ export default class ModelMaterial {
          //this.material.getEffect()?.setBool('progressMode', true).setBool('alphaMode', true)
       })
 
-      var time = 0
+      let time = 0
       this.material.onBindObservable.add(() => {
          time += this.scene.getEngine().getDeltaTime()
          this.material.getEffect()?.setFloat('utime', time)

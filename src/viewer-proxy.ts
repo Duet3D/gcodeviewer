@@ -79,7 +79,7 @@ export default class ViewerProxy {
          this.onerror(e)
       }
 
-      let offscreen = this.mainCanvas?.transferControlToOffscreen()
+      const offscreen = this.mainCanvas?.transferControlToOffscreen()
       this.webWorker.postMessage(
          {
             type: 'init',
@@ -124,7 +124,6 @@ export default class ViewerProxy {
                   console.error('Unknown target: ' + e.data.targetName)
                   return
                }
-               let that = this
 
                //console.log('Registering event ' + e.data.eventName + ' on ' + e.data.targetName)
 
@@ -134,14 +133,14 @@ export default class ViewerProxy {
                      // We can`t pass original event to the worker
                      let eventClone = {}
                      try {
-                        eventClone = that.cloneEvent(evt)
+                        eventClone = this.cloneEvent(evt)
                      } catch (e) {
                         console.log('Error cloning event', e)
                      }
                      evt.stopPropagation()
                      evt.preventDefault()
 
-                     that.webWorker.postMessage({
+                     this.webWorker.postMessage({
                         type: 'event',
                         targetName: e.data.targetName,
                         eventName: e.data.eventName,
@@ -257,6 +256,71 @@ export default class ViewerProxy {
       this.webWorker.postMessage({ type: 'stopNozzleAnimation' })
    }
 
+   showViewBox(visible: boolean): void {
+      this.webWorker.postMessage({ type: 'showViewBox', visible: visible })
+   }
+
+   setCameraDirection(direction: { x: number; y: number; z: number }): void {
+      this.webWorker.postMessage({ type: 'setCameraDirection', direction: direction })
+   }
+
+   resetCamera(): void {
+      this.webWorker.postMessage({ type: 'resetCamera' })
+   }
+
+   setBackgroundColor(color: string): void {
+      this.webWorker.postMessage({ type: 'setBackgroundColor', color: color })
+   }
+
+   setCameraInertia(enabled: boolean): void {
+      this.webWorker.postMessage({ type: 'setCameraInertia', enabled: enabled })
+   }
+
+   setZClipPlane(top: number, bottom: number): void {
+      this.webWorker.postMessage({ type: 'setZClipPlane', top: top, bottom: bottom })
+   }
+
+   setTools(tools: { color: string; diameter?: number }[]): void {
+      this.webWorker.postMessage({ type: 'setTools', tools: tools })
+   }
+
+   setBuildVolume(volume: { x: { min: number; max: number }; y: { min: number; max: number }; z: { min: number; max: number } }): void {
+      this.webWorker.postMessage({ type: 'setBuildVolume', volume: volume })
+   }
+
+   setBedRenderMode(mode: number): void {
+      this.webWorker.postMessage({ type: 'setBedRenderMode', mode: mode })
+   }
+
+   setBedColor(color: string): void {
+      this.webWorker.postMessage({ type: 'setBedColor', color: color })
+   }
+
+   setDeltaBed(isDelta: boolean): void {
+      this.webWorker.postMessage({ type: 'setDeltaBed', isDelta: isDelta })
+   }
+
+   showBed(visible: boolean): void {
+      this.webWorker.postMessage({ type: 'showBed', visible: visible })
+   }
+
+   showAxes(visible: boolean): void {
+      this.webWorker.postMessage({ type: 'showAxes', visible: visible })
+   }
+
+   // Boundary data from the printer object model; objectSelected/objectLabel events arrive via passThru
+   loadObjectBoundaries(objects: any[]): void {
+      this.webWorker.postMessage({ type: 'loadObjectBoundaries', objects: objects })
+   }
+
+   showObjectSelection(visible: boolean): void {
+      this.webWorker.postMessage({ type: 'showObjectSelection', visible: visible })
+   }
+
+   showObjectLabels(visible: boolean): void {
+      this.webWorker.postMessage({ type: 'showObjectLabels', visible: visible })
+   }
+
    enableWasmProcessing(): Promise<void> {
       return new Promise((resolve, reject) => {
          // Set up one-time message handler for WASM initialization result
@@ -293,9 +357,9 @@ export default class ViewerProxy {
 
    //Used to clone the event properties out of an object so they can be sent to worker
    cloneEvent(event) {
-      let cloneFieldList = event.constructor.name === 'KeyboardEvent' ? keyboardEventFields : mouseEventFields
+      const cloneFieldList = event.constructor.name === 'KeyboardEvent' ? keyboardEventFields : mouseEventFields
       const cloneFields = {}
-      for (let field of cloneFieldList) {
+      for (const field of cloneFieldList) {
          cloneFields[field] = event[field]
       }
       return cloneFields

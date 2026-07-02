@@ -1,4 +1,4 @@
-import ProcessorProperties from '../processorProperties'
+import ProcessorProperties from '../processorproperties'
 import { Comment } from '../GCodeLines'
 
 export function m17(props: ProcessorProperties, line: string) {

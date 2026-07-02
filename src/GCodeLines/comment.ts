@@ -3,6 +3,7 @@ import ProcessorProperties from '../processorproperties'
 
 export default class Comment extends Base {
    lineType = 'C'
+   comment: string = ''
    constructor(props: ProcessorProperties, line: string) {
       super(props, line)
       if (line.startsWith('M')) {

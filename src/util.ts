@@ -11,7 +11,7 @@ export function colorToNum(color: number[]) {
    return Number((color[0] << 16) + (color[1] << 8) + color[2])
 }
 
-export function colorToNumUint8(color: Uint8Array): Number {
+export function colorToNumUint8(color: Uint8Array): number {
    return (color[0] << 16) + (color[1] << 8) + color[2]
 }
 
@@ -26,13 +26,13 @@ function getNumber(tokenNumber, value, relativeMove, offset) {
 }
 
 export function doArc(tokens, currentPosition, relativeMove, arcSegLength, fixRadius, arcPlane, offset) {
-   let current = new Vector3(currentPosition.x, currentPosition.z, currentPosition.y)
-   let move = current.clone()
+   const current = new Vector3(currentPosition.x, currentPosition.z, currentPosition.y)
+   const move = current.clone()
 
    let i = 0,
       j = 0,
       r = 0
-   var cw = tokens.some((t) => t.includes('G2'))
+   const cw = tokens.some((t) => t.includes('G2'))
    //read params
    for (let tokenIdx = 0; tokenIdx < tokens.length; tokenIdx++) {
       const token = tokens[tokenIdx]
@@ -91,7 +91,7 @@ export function doArc(tokens, currentPosition, relativeMove, arcSegLength, fixRa
             axis0 = 'z' //Have to invert for correct arc direction per RRF
             axis1 = 'x'
             axis2 = 'y'
-            let temp = j //swap i and j
+            const temp = j //swap i and j
             j = i
             i = temp
          }
@@ -174,14 +174,14 @@ export function doArc(tokens, currentPosition, relativeMove, arcSegLength, fixRa
    let arcAngleIncrement = totalArc / totalSegments
    arcAngleIncrement *= cw ? -1 : 1
 
-   const points = new Array()
+   const points = []
 
    const axis2Dist = move[axis2] - current[axis2]
    const axis2Step = axis2Dist / totalSegments
 
    //get points for the arc
-   let p0 = current[axis0]
-   let p1 = current[axis1]
+   let p0
+   let p1
    let p2 = current[axis2]
    //calculate segments
    let currentAngle = arcCurrentAngle
@@ -190,7 +190,7 @@ export function doArc(tokens, currentPosition, relativeMove, arcSegLength, fixRa
       p0 = center0 + arcRadius * Math.cos(currentAngle)
       p1 = center1 + arcRadius * Math.sin(currentAngle)
       p2 += axis2Step
-      let output = {}
+      const output = {}
       output[axis0] = p0
       output[axis1] = p1
       output[axis2] = p2

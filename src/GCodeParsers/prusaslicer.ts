@@ -35,7 +35,7 @@ export default class PrusaSlicer extends SlicerBase {
          // Normalize: uppercase and collapse/harmonize separators
          const key = this.feature
             .toUpperCase()
-            .replace(/[\-_]/g, ' ')
+            .replace(/[-_]/g, ' ')
             .replace(/\s+/g, ' ')
             .trim()
 

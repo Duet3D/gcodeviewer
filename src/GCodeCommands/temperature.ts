@@ -1,4 +1,4 @@
-import ProcessorProperties from '../processorProperties'
+import ProcessorProperties from '../processorproperties'
 import { Comment } from '../GCodeLines'
 
 // Parse temperature parameter from line

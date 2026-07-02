@@ -1,5 +1,5 @@
 <template>
-   <div class="gcode-line prevent-select" :class="{ focused: focus }" @click.prevent="lineClicked" :title="line">
+   <div class="gcode-line prevent-select" :class="{ focused: focus }" :title="line" @click.prevent="lineClicked">
       <span :style="{ borderRightColor: background }" class="line-number">{{ `${lineNumber} : ${filePosition}` }}</span>
       <span class="line-content">{{ line }}</span>
    </div>

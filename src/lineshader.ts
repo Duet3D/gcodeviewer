@@ -1,7 +1,7 @@
 import { ShaderMaterial } from '@babylonjs/core/Materials/shaderMaterial'
 import { Scene } from '@babylonjs/core/scene'
 import { UniformBuffer } from '@babylonjs/core/Materials/uniformBuffer'
-import { Vector4, Vector3 } from '@babylonjs/core/Maths/math.vector'
+import { Vector4 } from '@babylonjs/core/Maths/math.vector'
 import '@babylonjs/core/Materials/standardMaterial'
 
 export default class LineShaderMaterial {
@@ -262,7 +262,7 @@ export default class LineShaderMaterial {
       })
 
       //Per loop
-      var time = 0
+      let time = 0
       this.material.onBindObservable.add(() => {
          time += this.scene.getEngine().getDeltaTime()
          this.material.getEffect()?.setFloat('utime', time)

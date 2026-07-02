@@ -1,13 +1,18 @@
 <script setup lang="ts">
-import { vModelSelect } from 'vue'
-import HelloWorld from './components/HelloWorld.vue'
-import TheWelcome from './components/TheWelcome.vue'
 import GCodeLine from './components/GCodeLine.vue'
-import { Viewer_Proxy as Viewer_Inst } from 'test'
-import { ref, onMounted, onUnmounted, reactive, watch } from 'vue'
+import { Viewer_Proxy as Viewer_Inst } from '@duet3d/gcodeviewer'
+import { ref, onMounted, onUnmounted, watch } from 'vue'
 import debounce from 'lodash.debounce'
 
-let viewer: Viewer | null = null
+interface GCodeLineItem {
+   line: string
+   lineNumber: number
+   lineType: string
+   focus: boolean
+   filePosition: number
+}
+
+let viewer: Viewer_Inst | null = null
 const viewercanvas = ref(null)
 const gcodeLine = ref({ line: '' })
 const filePos = ref(0)
@@ -15,7 +20,7 @@ const renderMode = ref(0)
 const playing = ref('mdi-play')
 const start = ref(0)
 const end = ref(0)
-const lines = ref<string[]>([])
+const lines = ref<GCodeLineItem[]>([])
 const alpha = ref(false)
 const progressMode = ref(false)
 const meshMode = ref(0)
@@ -76,10 +81,10 @@ onMounted(async () => {
          console.warn('Failed to enable WASM processing:', error)
       }
       
-      viewer.passThru = (e) => {
+      viewer.passThru = (e: any) => {
          switch (e.type) {
             case 'currentline':
-               gcodeLine.value.line = e
+               gcodeLine.value.line = e.line
                break
             case 'fileloaded':
                start.value = e.start
@@ -91,7 +96,7 @@ onMounted(async () => {
             case 'getgcodes':
                lines.value.length = 0
                lines.value.push(...e.lines)
-               lineNumber = lines.value.filter((l) => l.focus)[0].lineNumber
+               lineNumber = lines.value.filter((l) => l.focus)[0]?.lineNumber ?? lineNumber
                break
             case 'progress':
                progressValue.value = Math.floor(e.progress * 100)
@@ -141,7 +146,7 @@ async function openLocalFile(file: File): Promise<void> {
    const reader = new FileReader()
    reader.addEventListener('load', async (event) => {
       const blob = event?.target?.result
-      viewer.loadFile(blob)
+      viewer?.loadFile(blob)
    })
    reader.readAsText(file)
 }
@@ -152,7 +157,7 @@ function dragOver(event: DragEvent): void {
    }
 }
 
-function dragLeave(event: DragEvent): void {
+function dragLeave(): void {
    //Do nothing at the moment
 }
 
@@ -165,16 +170,16 @@ async function drop(event: DragEvent): Promise<void> {
    }
 }
 
-watch(renderMode, (newVal, oldVal) => {
-   viewer.setRenderMode(newVal)
+watch(renderMode, (newVal) => {
+   viewer?.setRenderMode(newVal)
 })
 
-watch(meshMode, (newVal, oldVal) => {
-   viewer.setMeshMode(newVal)
+watch(meshMode, (newVal) => {
+   viewer?.setMeshMode(newVal)
 })
 
-watch(progressMode, (newVal, oldVal) => {
-   viewer.setProgressMode(newVal)
+watch(progressMode, (newVal) => {
+   viewer?.setProgressMode(newVal)
 })
 
 watch(filePos, (newVal, oldVal) => {
@@ -182,48 +187,39 @@ watch(filePos, (newVal, oldVal) => {
    // Always allow manual position updates, even during animation (for skipping)
    if (!animationMode || Math.abs(newVal - oldVal) > 1000) {
       // Large position changes (likely manual) should always be processed
-      viewer.updateFilePosition(newVal, false)
+      viewer?.updateFilePosition(newVal, false)
    } else if (!animationMode) {
       // Small changes when not animating
-      viewer.updateFilePosition(newVal, false)
+      viewer?.updateFilePosition(newVal, false)
    }
    // If it's a small change during animation, ignore it (automatic update)
 })
 
 watch(
    filePos,
-   debounce((newVal) => {
-      viewer.getGCodes(filePos.value, 21)
+   debounce(() => {
+      viewer?.getGCodes(filePos.value, 21)
    }, 10),
 )
 
 watch(alpha, (newVal) => {
-   viewer.setAlphaMode(newVal)
+   viewer?.setAlphaMode(newVal)
 })
 
 watch(fps, (newVal) => {
-   viewer.setMaxFPS(newVal)
+   viewer?.setMaxFPS(newVal)
 })
 
 watch(perimeterOnly, (newVal) => {
-   viewer.setPerimeterOnly(newVal)
+   viewer?.setPerimeterOnly(newVal)
 })
 
 watch(nozzleVisible, (newVal) => {
-   viewer.toggleNozzle(newVal)
+   viewer?.toggleNozzle(newVal)
 })
 
-function reset() {
-   viewer.reset()
-   viewer.updateColorTest()
-}
-
-function colortest() {
-   viewer.updateColorTest()
-}
-
 function filePosInput() {
-   viewer.updateFilePosition(filePos.value)
+   viewer?.updateFilePosition(filePos.value)
 }
 
 let timeOutId = -1
@@ -237,7 +233,7 @@ function toggleIncrement() {
       }
 
       // Stop the nozzle animation system
-      viewer.stopNozzleAnimation()
+      viewer?.stopNozzleAnimation()
 
       playing.value = 'mdi-play'
       isPlaying = false
@@ -250,14 +246,14 @@ function toggleIncrement() {
 
       console.log('Starting nozzle animation')
       // Start the synchronized nozzle animation system
-      viewer.startNozzleAnimation()
+      viewer?.startNozzleAnimation()
    }
 }
 function lineClicked(props: any[]) {
    filePos.value = props[0]
 }
 
-function getProcessingMethodColor(method: string): string {
+function getProcessingMethodColor(method: string): 'success' | 'info' | 'warning' | 'error' {
    switch (method) {
       case 'hybrid': return 'success'
       case 'wasm': return 'info'
@@ -280,39 +276,39 @@ function getProcessingSpeed(): string {
    <header>
       <div class="gcodeline">{{ gcodeLine.line }}</div>
       <canvas
+         ref="viewercanvas"
          class="canvasFull"
          tabindex="1"
-         ref="viewercanvas"
          @dragover.prevent="dragOver"
          @dragleave="dragLeave"
          @drop.prevent="drop"
       />
       <v-select
+         v-model="renderMode"
          item-title="label"
          item-value="value"
          class="reset"
          label="Render Mode"
-         v-model="renderMode"
          :items="renderModes"
       ></v-select>
       <v-select
+         v-model="meshMode"
          item-title="label"
          item-value="value"
          class="meshes"
          label="Mesh Mode"
-         v-model="meshMode"
          :items="meshModes"
       ></v-select>
       <v-select
+         v-model="fps"
          item-title="label"
          item-value="value"
          class="fps"
          label="FPS"
-         v-model="fps"
          :items="fpsValues"
       ></v-select>
       <form @submit.prevent="filePosInput">
-         <v-text-field density="compact" variant="outlined" class="filePosInput" v-model="filePos" />
+         <v-text-field v-model="filePos" density="compact" variant="outlined" class="filePosInput" />
       </form>
       <v-btn class="filePlay" size="large" type="button" @click="toggleIncrement"
          ><v-icon :icon="playing"></v-icon
@@ -320,7 +316,7 @@ function getProcessingSpeed(): string {
       <div class="lines">
          <GCodeLine
             v-for="l in lines"
-            :key="l"
+            :key="l.lineNumber"
             :line="l.line"
             :line-number="l.lineNumber"
             :line-type="l.lineType"
@@ -335,11 +331,11 @@ function getProcessingSpeed(): string {
          <span>{{ end }}</span>
       </div>
       <v-slider v-model="filePos" class="slider-pos" :min="start" :max="end" :step="1"></v-slider>
-      <v-checkbox class="alpha" v-model="alpha">Set Alpha</v-checkbox>
-      <v-checkbox class="progress" v-model="progressMode">Progress Mode</v-checkbox>
-      <v-checkbox class="perimeterOnly" v-model="perimeterOnly">Perimeter Only</v-checkbox>
-      <v-checkbox class="nozzle" v-model="nozzleVisible">Show Nozzle</v-checkbox>
-      <v-checkbox class="debug-panel" v-model="showDebugPanel">Show Debug Panel</v-checkbox>
+      <v-checkbox v-model="alpha" class="alpha">Set Alpha</v-checkbox>
+      <v-checkbox v-model="progressMode" class="progress">Progress Mode</v-checkbox>
+      <v-checkbox v-model="perimeterOnly" class="perimeterOnly">Perimeter Only</v-checkbox>
+      <v-checkbox v-model="nozzleVisible" class="nozzle">Show Nozzle</v-checkbox>
+      <v-checkbox v-model="showDebugPanel" class="debug-panel">Show Debug Panel</v-checkbox>
       
       <!-- Debug Panel -->
       <div v-if="showDebugPanel" class="debug-panel-container">
@@ -347,12 +343,12 @@ function getProcessingSpeed(): string {
             <v-card-title class="debug-title">
                <v-icon>mdi-bug</v-icon>
                Processing Debug Info
-               <v-btn size="small" @click="refreshProcessingStats" variant="outlined">
+               <v-btn size="small" variant="outlined" @click="refreshProcessingStats">
                   <v-icon>mdi-refresh</v-icon> Refresh
                </v-btn>
             </v-card-title>
             <v-card-text>
-               <v-row dense>
+               <v-row density="compact">
                   <v-col cols="12" md="6">
                      <v-alert 
                         :type="processingStats.wasmEnabled ? 'success' : 'warning'" 
@@ -373,13 +369,13 @@ function getProcessingSpeed(): string {
                
                <v-divider class="my-2"></v-divider>
                
-               <v-row dense v-if="processingStats.wasmVersion">
+               <v-row v-if="processingStats.wasmVersion" density="compact">
                   <v-col cols="12">
                      <strong>WASM Version:</strong> {{ processingStats.wasmVersion }}
                   </v-col>
                </v-row>
                
-               <v-row dense v-if="processingStats.linesProcessed > 0">
+               <v-row v-if="processingStats.linesProcessed > 0" density="compact">
                   <v-col cols="6" md="3">
                      <div class="stat-item">
                         <div class="stat-label">Lines</div>
@@ -406,28 +402,28 @@ function getProcessingSpeed(): string {
                   </v-col>
                </v-row>
                
-               <v-divider class="my-2" v-if="processingStats.totalTime > 0"></v-divider>
+               <v-divider v-if="processingStats.totalTime > 0" class="my-2"></v-divider>
                
-               <v-row dense v-if="processingStats.totalTime > 0">
+               <v-row v-if="processingStats.totalTime > 0" density="compact">
                   <v-col cols="3">
                      <div class="stat-item">
                         <div class="stat-label">Total Time</div>
                         <div class="stat-value">{{ Math.round(processingStats.totalTime || 0) }}ms</div>
                      </div>
                   </v-col>
-                  <v-col cols="3" v-if="processingStats.wasmTime > 0">
+                  <v-col v-if="processingStats.wasmTime > 0" cols="3">
                      <div class="stat-item">
                         <div class="stat-label">WASM Parse</div>
                         <div class="stat-value">{{ Math.round(processingStats.wasmTime || 0) }}ms</div>
                      </div>
                   </v-col>
-                  <v-col cols="3" v-if="processingStats.wasmRenderTime > 0">
+                  <v-col v-if="processingStats.wasmRenderTime > 0" cols="3">
                      <div class="stat-item">
                         <div class="stat-label">WASM Render</div>
                         <div class="stat-value">{{ Math.round(processingStats.wasmRenderTime || 0) }}ms</div>
                      </div>
                   </v-col>
-                  <v-col cols="3" v-if="processingStats.typescriptTime > 0">
+                  <v-col v-if="processingStats.typescriptTime > 0" cols="3">
                      <div class="stat-item">
                         <div class="stat-label">TS Time</div>
                         <div class="stat-value">{{ Math.round(processingStats.typescriptTime || 0) }}ms</div>
@@ -435,7 +431,7 @@ function getProcessingSpeed(): string {
                   </v-col>
                </v-row>
                
-               <v-row dense v-if="processingStats.renderSegmentsGenerated > 0">
+               <v-row v-if="processingStats.renderSegmentsGenerated > 0" density="compact">
                   <v-col cols="12">
                      <v-alert type="success" density="compact" variant="tonal">
                         🚀 WASM generated {{ processingStats.renderSegmentsGenerated?.toLocaleString() }} render segments
@@ -446,7 +442,7 @@ function getProcessingSpeed(): string {
          </v-card>
       </div>
       
-      <div class="progressbar" v-if="progressValue < 100">
+      <div v-if="progressValue < 100" class="progressbar">
          <v-label>{{ progressLabel }}</v-label>
          <v-progress-linear :model-value="progressValue"></v-progress-linear>
       </div>
@@ -499,9 +495,10 @@ header {
    color: white;
 }
 
+/* Keep clear of the viewer cube overlay in the top-right corner */
 .reset {
    position: absolute;
-   top: 10px;
+   top: 120px;
    right: 10px;
    z-index: 11;
    width: 300px;
@@ -582,7 +579,7 @@ header {
 
 .meshes {
    position: absolute;
-   top: 70px;
+   top: 180px;
    right: 10px;
    z-index: 11;
    width: 300px;
@@ -600,7 +597,7 @@ header {
 
 .fps {
    position: absolute;
-   top: 130px;
+   top: 240px;
    right: 10px;
    z-index: 11;
    width: 300px;

@@ -1,7 +1,7 @@
 import { Base, Comment } from '../GCodeLines'
 import Props from '../processorproperties'
 
-const toolRegex = /^[T]\-?[0-9]+/g
+const toolRegex = /^[T]-?[0-9]+/g
 
 export default function (props: Props, line: string): Base {
    let toolIdx = Number(line.match(toolRegex)[0].substring(1).trim())

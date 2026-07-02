@@ -50,11 +50,15 @@ export default class ProcessorProperties {
    fixRadius: boolean = false // Used to fix a radius on an arc if it's too small. Some CNC processors "fix" G2/G3 for you
    arcPlane: ArcPlane = ArcPlane.XY // Used to determine the plane of an arc
    cncMode: boolean = false
+   spindleSpeed: number = 0
+   spindleOn: boolean = false
+   bedLevelingActive: boolean = false
+   extruderAbsolute: boolean = true
    slicer: SlicerBase = new GenericBase()
 
    //Used for belt processing
    zBelt: boolean = false
-   zBeltLength: Number = 100
+   zBeltLength: number = 100
    gantryAngle = (45 * Math.PI) / 180
    currentZ = 0
    hyp = Math.cos(this.gantryAngle)
@@ -86,8 +90,7 @@ export default class ProcessorProperties {
    }
 
    buildToolFloat32Array() {
-      let toolArray = new Array(this.lineCount * 4)
-      let idx = 0
+      const toolArray = new Array(this.tools.length * 4)
       for (let idx = 0; idx < this.tools.length; idx++) {
          this.tools[idx].color.toArray(toolArray, idx * 4)
       }
