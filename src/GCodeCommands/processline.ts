@@ -344,12 +344,10 @@ export function ProcessLine(props: ProcessorProperties, line: string): Base {
          result = GCodeCommands.m600(props, line)
          break
       default:
-         // Check for T commands (tool changes)
-         if (lastCommand.startsWith('T') && /T\d+/.test(lastCommand)) {
-            result = GCodeCommands.t(props, line)
-         } else {
-            result = new Comment(props, line)
-         }
+         // A genuine tool change begins with Tnn and is already handled by the startsWith('T') fast
+         // path above. Reaching here with a trailing Tnn token means it is a parameter (e.g. the
+         // Tnn inside `M98 P"..." Tnn`), not a command, so it is just a comment
+         result = new Comment(props, line)
          break
    }
 

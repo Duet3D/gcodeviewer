@@ -26,7 +26,9 @@ export default class Processor {
    gpuPicker: GPUPicker
    worker: Worker
    //modelMaterial: ModelMaterial[]
-   modelMaterial: LineShaderMaterial[]
+   // Starts empty so material setters (render mode, alpha, tools) called before the first file is
+   // loaded are harmless no-ops rather than dereferencing undefined
+   modelMaterial: LineShaderMaterial[] = []
    filePosition: number = 0
    maxIndex: number = 0
    focusedColorId = 0
@@ -142,6 +144,10 @@ export default class Processor {
    }
 
    async loadFile(file) {
+      // No file yet (e.g. setPerimeterOnly toggled before anything was loaded) - nothing to parse
+      if (!file) {
+         return
+      }
       this.originalFile = file
       this.cleanup()
       // Buffers from a previous WASM load must not leak into this one, otherwise a TS-parsed file would render the previous file's geometry
@@ -387,7 +393,7 @@ export default class Processor {
             this.worker.postMessage({
                type: 'progress',
                progress: progress,
-               label: `WASM: ${label}`,
+               label: label ? `WASM: ${label}` : 'Processing file',
             })
          })
 

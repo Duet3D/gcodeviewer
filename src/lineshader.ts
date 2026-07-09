@@ -40,6 +40,7 @@ export default class LineShaderMaterial {
    uniform bool progressMode;
    uniform vec4 progressColor;
    uniform bool showSupports;
+   uniform bool showTravels;
    uniform float utime;
    uniform int renderMode;
 
@@ -94,9 +95,13 @@ export default class LineShaderMaterial {
          }
          else if (tool >= 254.0)  //Travel
          {
-            if(fShow >= 0.0 && fShow < animationLength / 8.0) 
+            if(fShow >= 0.0 && fShow < animationLength / 8.0)
             {
                   vDiffColor = mix(vec3(1.0, 0.0, 0.0), vec3(0.5,0.0,0.0), fShow / animationLength / 2.0);
+            }
+            else if (showTravels && fShow >= 0.0)
+            {
+               vDiffColor = vec3(0.3, 0.5, 0.8); // persistent travel lines
             }
             else
             {
@@ -147,6 +152,7 @@ export default class LineShaderMaterial {
    uniform bool lineMesh;
    uniform bool alphaMode;
    uniform bool progressMode;
+   uniform float alphaValue;
 
    flat in vec3 vDiffColor;
    flat in float fIsPerimeter;
@@ -169,7 +175,7 @@ export default class LineShaderMaterial {
          }
          else
          {
-            diffuseColor.a = fShow >= 0.0 || !alphaMode ? 0.99 : 0.05; 
+            diffuseColor.a = fShow >= 0.0 || !alphaMode ? 0.99 : alphaValue;
          }
          
         if(lineMesh) {
@@ -240,10 +246,12 @@ export default class LineShaderMaterial {
                'maxFeedRate',
                'minFeedRate',
                'alphaMode',
+               'alphaValue',
                'progressMode',
                'progressColor',
                'lineMesh',
                'showSupports',
+               'showTravels',
                'utime',
             ],
          },
@@ -258,6 +266,8 @@ export default class LineShaderMaterial {
             .getEffect()
             ?.setFloat('animationLength', 5000)
             .setVector4('progressColor', new Vector4(0, 1, 0, 1))
+            .setFloat('alphaValue', 0.05)
+            .setBool('showTravels', false)
             .setBool('lineMesh', false) // Default to false (lighting enabled)
       })
 
@@ -321,9 +331,22 @@ export default class LineShaderMaterial {
       })
    }
 
+   // Opacity (0-1) of not-yet-printed geometry while alpha mode is on
+   setAlphaValue(value: number) {
+      this.material.onBindObservable.addOnce(() => {
+         this.material.getEffect()?.setFloat('alphaValue', value)
+      })
+   }
+
    setProgressMode(mode: boolean) {
       this.material.onBindObservable.addOnce(() => {
          this.material.getEffect()?.setBool('progressMode', mode)
+      })
+   }
+
+   setShowTravels(show: boolean) {
+      this.material.onBindObservable.addOnce(() => {
+         this.material.getEffect()?.setBool('showTravels', show)
       })
    }
 

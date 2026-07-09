@@ -21,6 +21,8 @@ export interface ViewBoxDirection {
 // Orientation cube overlay in the top-right corner. Lives in its own scene rendered on top of the main scene,
 // follows the orbit camera's rotation, and snaps the main camera when a face/edge/corner is clicked
 export default class ViewBox {
+   // The six face planes, by mesh name, so pick() can favour the edge/corner meshes behind them
+   private static readonly FACE_NAMES = new Set(['Front', 'Back', 'Left', 'Right', 'Top', 'Bottom'])
    private scene: Scene
    private camera: ArcRotateCamera
    private mainCamera: ArcRotateCamera
@@ -36,7 +38,8 @@ export default class ViewBox {
       this.scene.doNotHandleCursors = true
 
       this.camera = new ArcRotateCamera('viewboxCamera', (5 * Math.PI) / 8, (5 * Math.PI) / 8, 15, Vector3.Zero(), this.scene)
-      this.camera.viewport = new Viewport(0.85, 0.85, 0.15, 0.15)
+      // Viewport is set in render() so it stays a square pinned to the top-right corner as the
+      // canvas aspect changes (a fixed normalized viewport would stretch into a wide rectangle)
 
       const light = new HemisphericLight('viewboxLight1', new Vector3(0, 1, 0), this.scene)
       light.intensity = 0.8
@@ -86,7 +89,13 @@ export default class ViewBox {
       if (!this.visible) {
          return null
       }
-      const pickResult = this.scene.pick(x, y, undefined, false, this.camera)
+      // Edge boxes and corner spheres sit just inside the face planes, so a plain closest-hit pick
+      // returns the face that occludes them near the cube's edges/corners. Test the edges/corners
+      // first (ignoring the six face planes) so those small targets win, then fall back to the faces
+      let pickResult = this.scene.pick(x, y, (mesh) => mesh.isPickable && !ViewBox.FACE_NAMES.has(mesh.name), false, this.camera)
+      if (!pickResult.hit || !pickResult.pickedMesh?.metadata) {
+         pickResult = this.scene.pick(x, y, undefined, false, this.camera)
+      }
       if (pickResult.hit && pickResult.pickedMesh?.metadata) {
          return pickResult.pickedMesh.metadata as ViewBoxDirection
       }
@@ -153,10 +162,29 @@ export default class ViewBox {
       if (!this.visible) {
          return
       }
+      this.updateViewport()
       this.camera.alpha = this.mainCamera.alpha
       this.camera.beta = this.mainCamera.beta
       this.camera.radius = 15
       this.scene.render()
+   }
+
+   // Keep the cube a square in the top-right corner with equal top and right margins, recomputing
+   // only when the render size changes
+   private lastRenderWidth = -1
+   private lastRenderHeight = -1
+   private updateViewport() {
+      const width = this.scene.getEngine().getRenderWidth()
+      const height = this.scene.getEngine().getRenderHeight()
+      if (width === this.lastRenderWidth && height === this.lastRenderHeight) {
+         return
+      }
+      this.lastRenderWidth = width
+      this.lastRenderHeight = height
+      const shortSide = Math.min(width, height)
+      const size = shortSide * 0.18
+      const margin = shortSide * 0.03
+      this.camera.viewport = new Viewport((width - margin - size) / width, (height - margin - size) / height, size / width, size / height)
    }
 
    show(visible: boolean) {

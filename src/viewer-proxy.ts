@@ -140,6 +140,16 @@ export default class ViewerProxy {
                      evt.stopPropagation()
                      evt.preventDefault()
 
+                     // Babylon derives pointerX/Y as clientX/Y minus the canvas rect. The worker's
+                     // faked canvas reports a rect at the origin, so translate mouse coords to
+                     // canvas-relative here using the live rect - correct under scroll/layout shifts,
+                     // which a cached rect on the worker side would miss (the page scrolls after load)
+                     if (e.data.targetName === 'canvas' && this.mainCanvas && typeof (eventClone as any).clientX === 'number') {
+                        const rect = this.mainCanvas.getBoundingClientRect()
+                        ;(eventClone as any).clientX -= rect.left
+                        ;(eventClone as any).clientY -= rect.top
+                     }
+
                      this.webWorker.postMessage({
                         type: 'event',
                         targetName: e.data.targetName,
@@ -268,6 +278,16 @@ export default class ViewerProxy {
       this.webWorker.postMessage({ type: 'resetCamera' })
    }
 
+   // Frame the loaded print (rather than the whole bed) with the default front-45 orientation
+   frameToPrint(): void {
+      this.webWorker.postMessage({ type: 'frameToPrint' })
+   }
+
+   // Ask the worker to report the print's Z extent; arrives as a `printbounds` event via passThru
+   requestPrintBounds(): void {
+      this.webWorker.postMessage({ type: 'requestPrintBounds' })
+   }
+
    setBackgroundColor(color: string): void {
       this.webWorker.postMessage({ type: 'setBackgroundColor', color: color })
    }
@@ -294,6 +314,22 @@ export default class ViewerProxy {
 
    setBedColor(color: string): void {
       this.webWorker.postMessage({ type: 'setBedColor', color: color })
+   }
+
+   setProgressColor(color: string): void {
+      this.webWorker.postMessage({ type: 'setProgressColor', color: color })
+   }
+
+   setTransparencyValue(value: number): void {
+      this.webWorker.postMessage({ type: 'setTransparencyValue', value: value })
+   }
+
+   setShowTravels(show: boolean): void {
+      this.webWorker.postMessage({ type: 'setShowTravels', show: show })
+   }
+
+   setAnimationSpeed(speed: number): void {
+      this.webWorker.postMessage({ type: 'setAnimationSpeed', speed: speed })
    }
 
    setDeltaBed(isDelta: boolean): void {

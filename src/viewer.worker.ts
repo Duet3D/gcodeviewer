@@ -54,6 +54,12 @@ self.addEventListener('message', async (message) => {
       case 'unload':
          self.viewer.unload()
          break
+      case 'reset':
+         // Clear the current print (meshes + materials) but keep the engine, scene and WASM
+         // processor alive so another file can be loaded without recreating the worker
+         self.viewer.processor.cleanup()
+         self.viewer.resetCamera()
+         break
       case 'rendermode':
          self.viewer.processor.modelMaterial.forEach((m) => m.updateRenderMode(message.data.mode))
          break
@@ -116,6 +122,12 @@ self.addEventListener('message', async (message) => {
       case 'setCameraDirection':
          self.viewer.setCameraDirection(message.data.direction)
          break
+      case 'frameToPrint':
+         self.viewer.frameToPrint()
+         break
+      case 'requestPrintBounds':
+         self.viewer.postPrintBounds()
+         break
       case 'resetCamera':
          self.viewer.resetCamera()
          break
@@ -139,6 +151,18 @@ self.addEventListener('message', async (message) => {
          break
       case 'setBedColor':
          self.viewer.setBedColor(message.data.color)
+         break
+      case 'setProgressColor':
+         self.viewer.setProgressColor(message.data.color)
+         break
+      case 'setTransparencyValue':
+         self.viewer.setTransparencyValue(message.data.value)
+         break
+      case 'setShowTravels':
+         self.viewer.setShowTravels(message.data.show)
+         break
+      case 'setAnimationSpeed':
+         self.viewer.setAnimationSpeed(message.data.speed)
          break
       case 'setDeltaBed':
          self.viewer.setDeltaBed(message.data.isDelta)

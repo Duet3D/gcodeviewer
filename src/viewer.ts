@@ -108,6 +108,8 @@ export default class Viewer {
          this.offscreenCanvas.width = width
          this.offscreenCanvas.height = height
 
+         // Pointer coords are translated to canvas-relative in the proxy (viewer-proxy.ts) using the
+         // live rect, so this faked rect stays at the origin and only needs the current size
          this.rect.right = this.rect.width = width
          this.rect.bottom = this.rect.height = height
       }
@@ -243,7 +245,13 @@ export default class Viewer {
          if (pointerInfo.type == PointerEventTypes.POINTERTAP) {
             const direction = this.viewBox?.pick(this.scene.pointerX, this.scene.pointerY)
             if (direction) {
-               this.setCameraDirection(direction)
+               // Middle-click on the cube returns to the default framing; left-click snaps to the
+               // clicked face/edge/corner
+               if ((pointerInfo.event as any)?.button === 1) {
+                  this.resetCamera()
+               } else {
+                  this.setCameraDirection(direction)
+               }
                return
             }
             try {
@@ -257,6 +265,11 @@ export default class Viewer {
       })
 
       //this.loadInstrumentation()
+
+      // The scene, bed, axes, camera and build-object machinery are all created above in this async
+      // method. Signal the main thread that configuration messages (build volume, bed, tools,
+      // camera) can now be applied without racing an undefined scene
+      this.worker.postMessage({ type: 'ready' })
    }
 
    // Snap the orbit camera so it views the bed from the given direction (viewbox face/edge/corner metadata)
@@ -289,15 +302,67 @@ export default class Viewer {
       }
       const bedCenter = this.bed.getCenter()
       const bedSize = this.bed.getSize()
-      this.orbitCamera.setTarget(new Vector3(bedCenter.x, -2, bedCenter.y))
-      if (this.bed.isDelta) {
-         this.orbitCamera.radius = bedCenter.x
-         this.orbitCamera.setPosition(new Vector3(-bedSize.x, bedSize.z, -bedSize.x))
-      } else {
-         this.orbitCamera.radius = bedCenter.x * 3
-         this.orbitCamera.setPosition(new Vector3(-bedSize.x / 2, bedSize.z, -bedSize.y / 2))
-      }
+      // Front view tilted 45 deg down: alpha -PI/2 faces the front edge, beta PI/4 is the tilt.
+      // Babylon space maps G-code X -> x, height -> y (up), G-code Y -> z, so the bed centre's y
+      // (G-code Y) becomes the Babylon z target
+      const footprint = Math.max(bedSize.x, bedSize.y, 1)
+      // Aim below the plate so the bed rides in the upper-middle of the frame, leaving room at the
+      // bottom for the playback controls (the historical DWC framing)
+      this.orbitCamera.setTarget(new Vector3(bedCenter.x, -footprint * 0.12, bedCenter.y))
+      this.orbitCamera.alpha = -Math.PI / 2
+      this.orbitCamera.beta = Math.PI / 4
+      // Pull back far enough to frame the whole bed footprint (bedSize.x/y are the G-code X/Y spans)
+      this.orbitCamera.radius = footprint * (this.bed.isDelta ? 1.1 : 1.2)
       this.scene?.render(true)
+   }
+
+   // World-space bounding box of the loaded print, unioned across the rendered meshes' thin instances.
+   // Null when nothing is loaded, so callers fall back to bed framing
+   private getPrintBoundingBox(): { min: Vector3; max: Vector3 } | null {
+      const meshes = this.processor?.meshes
+      if (!meshes || meshes.length === 0) {
+         return null
+      }
+      let min: Vector3 | null = null
+      let max: Vector3 | null = null
+      for (const mesh of meshes) {
+         if (!mesh || mesh.thinInstanceCount === 0) {
+            continue
+         }
+         mesh.thinInstanceRefreshBoundingInfo(true)
+         const box = mesh.getBoundingInfo().boundingBox
+         min = min ? Vector3.Minimize(min, box.minimumWorld) : box.minimumWorld.clone()
+         max = max ? Vector3.Maximize(max, box.maximumWorld) : box.maximumWorld.clone()
+      }
+      return min && max ? { min, max } : null
+   }
+
+   // Front view tilted 45 deg down, framed to the printed geometry rather than the whole bed (used by
+   // the embedded job view); falls back to bed framing when nothing is loaded yet
+   frameToPrint() {
+      const bounds = this.getPrintBoundingBox()
+      if (!bounds || !this.orbitCamera) {
+         this.resetCamera()
+         return
+      }
+      const center = bounds.min.add(bounds.max).scale(0.5)
+      const size = bounds.max.subtract(bounds.min)
+      const span = Math.max(size.x, size.y, size.z, 1)
+      this.orbitCamera.setTarget(new Vector3(center.x, center.y - span * 0.12, center.z))
+      this.orbitCamera.alpha = -Math.PI / 2
+      this.orbitCamera.beta = Math.PI / 4
+      this.orbitCamera.radius = span * 1.5
+      this.scene?.render(true)
+   }
+
+   // Report the print's Z extent (Babylon y is height) so the main thread can bound the clip sliders
+   postPrintBounds() {
+      const bounds = this.getPrintBoundingBox()
+      this.worker.postMessage({
+         type: 'printbounds',
+         minHeight: bounds ? bounds.min.y : 0,
+         maxHeight: bounds ? bounds.max.y : 0,
+      })
    }
 
    // Excluded meshes (bed, axes, object boundaries) temporarily lift the clip planes while they render
@@ -368,6 +433,27 @@ export default class Viewer {
 
    setBedColor(color: string) {
       this.bed?.setBedColor(color)
+   }
+
+   // Colour used for not-yet-printed geometry in progress mode (hex string, e.g. "#FFFFFFFF")
+   setProgressColor(color: string) {
+      const c = Color4.FromHexString(color.padEnd(9, 'F'))
+      this.processor.modelMaterial.forEach((m) => m.setProgressColor([c.r * 255, c.g * 255, c.b * 255, c.a * 255]))
+   }
+
+   // Opacity (0-1) of not-yet-printed geometry while alpha mode is on
+   setTransparencyValue(value: number) {
+      this.processor.modelMaterial.forEach((m) => m.setAlphaValue(value))
+   }
+
+   // Show/hide the printed travel (non-extruding) moves
+   setShowTravels(show: boolean) {
+      this.processor.modelMaterial.forEach((m) => m.setShowTravels(show))
+   }
+
+   // Playback speed multiplier for the nozzle animation (the scrubber's play button)
+   setAnimationSpeed(speed: number) {
+      this.processor.getNozzle()?.setAnimationSpeed(speed)
    }
 
    setDeltaBed(isDelta: boolean) {
