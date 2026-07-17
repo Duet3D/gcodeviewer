@@ -68,6 +68,9 @@ const keyboardEventFields = [
 export default class ViewerProxy {
    private webWorker: Worker
    mainCanvas: HTMLCanvasElement | null = null
+   // Every DOM listener we install on the worker's behalf, so unload() can detach them all. Without
+   // this they leak on every mount/unmount and keep posting into a terminated worker
+   private registeredListeners: Array<{ target: EventTarget; eventName: string; handler: EventListener; opt: any }> = []
 
    constructor(canvas: HTMLCanvasElement) {
       this.mainCanvas = canvas
@@ -90,14 +93,20 @@ export default class ViewerProxy {
          [offscreen],
       )
 
-      //Handle window resize events without user having to implement
-      window.onresize = () => {
+      // Forward window resizes to the worker without the host having to wire it up. Tracked like any
+      // other listener so it's removed on unload rather than clobbering window.onresize
+      this.addTrackedListener(window, 'resize', () => {
          this.webWorker.postMessage({
             type: 'resize',
             width: this.mainCanvas?.clientWidth,
             height: this.mainCanvas?.clientHeight,
          })
-      }
+      })
+   }
+
+   private addTrackedListener(target: EventTarget, eventName: string, handler: EventListener, opt?: any) {
+      target.addEventListener(eventName, handler, opt)
+      this.registeredListeners.push({ target, eventName, handler, opt })
    }
 
    //Messages from the worker
@@ -127,7 +136,8 @@ export default class ViewerProxy {
 
                //console.log('Registering event ' + e.data.eventName + ' on ' + e.data.targetName)
 
-               target.addEventListener(
+               this.addTrackedListener(
+                  target,
                   e.data.eventName,
                   (evt) => {
                      // We can`t pass original event to the worker
@@ -168,6 +178,7 @@ export default class ViewerProxy {
             }
             break
          case 'unloadComplete':
+            this.removeAllListeners()
             this.webWorker.terminate()
             break
          //case 'currentline':
@@ -266,6 +277,12 @@ export default class ViewerProxy {
       this.webWorker.postMessage({ type: 'stopNozzleAnimation' })
    }
 
+   // Enable/disable click-to-seek on rendered lines. The live job view disables it so the print head
+   // can't be scrubbed away from the printer's actual position
+   setAllowSeek(enabled: boolean): void {
+      this.webWorker.postMessage({ type: 'setAllowSeek', enabled: enabled })
+   }
+
    showViewBox(visible: boolean): void {
       this.webWorker.postMessage({ type: 'showViewBox', visible: visible })
    }
@@ -359,10 +376,15 @@ export default class ViewerProxy {
 
    enableWasmProcessing(): Promise<void> {
       return new Promise((resolve, reject) => {
-         // Set up one-time message handler for WASM initialization result
+         // Resolve on the worker's reply, but also reject if the worker itself dies (no OffscreenCanvas,
+         // CSP blocking wasm-eval, etc). Otherwise this promise would hang forever and the host awaits it
+         const cleanup = () => {
+            this.webWorker.removeEventListener('message', handleWasmInit)
+            this.webWorker.removeEventListener('error', handleWorkerError)
+         }
          const handleWasmInit = (e: MessageEvent) => {
             if (e.data.type === 'wasmInitialized') {
-               this.webWorker.removeEventListener('message', handleWasmInit)
+               cleanup()
                if (e.data.success) {
                   resolve()
                } else {
@@ -370,8 +392,13 @@ export default class ViewerProxy {
                }
             }
          }
-         
+         const handleWorkerError = (e: ErrorEvent) => {
+            cleanup()
+            reject(new Error(e.message || 'Viewer worker crashed during WASM initialization'))
+         }
+
          this.webWorker.addEventListener('message', handleWasmInit)
+         this.webWorker.addEventListener('error', handleWorkerError)
          this.webWorker.postMessage({ type: 'enableWasmProcessing' })
       })
    }
@@ -389,6 +416,13 @@ export default class ViewerProxy {
          this.webWorker.addEventListener('message', handleStats)
          this.webWorker.postMessage({ type: 'getProcessingStats' })
       })
+   }
+
+   private removeAllListeners() {
+      for (const { target, eventName, handler, opt } of this.registeredListeners) {
+         target.removeEventListener(eventName, handler, opt)
+      }
+      this.registeredListeners = []
    }
 
    //Used to clone the event properties out of an object so they can be sent to worker

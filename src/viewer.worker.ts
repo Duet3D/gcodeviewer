@@ -51,6 +51,12 @@ self.addEventListener('message', async (message) => {
       case 'loadFile':
          self.viewer.loadFile(message.data.file)
          break
+      case 'cancel':
+         self.viewer.processor.cancelLoad()
+         break
+      case 'setAllowSeek':
+         self.viewer.setAllowSeek(message.data.enabled)
+         break
       case 'unload':
          self.viewer.unload()
          break

@@ -34,7 +34,9 @@ export default class Processor {
    focusedColorId = 0
    lastMeshMode = 0
    perimeterOnly = false
-   originalFile: string //May or may not keep this. May force front end to reprovide or cache file.
+   originalFile: string | undefined
+   // Set by cancelLoad() to abort an in-progress parse at the next chunk boundary
+   private cancelRequested = false
    nozzle: Nozzle | null = null
    // Track position data for nozzle animation since Move objects get replaced with Move_Thin
    positionTracker: Map<number, { x: number; y: number; z: number; feedRate: number; extruding: boolean }> = new Map()
@@ -132,7 +134,26 @@ export default class Processor {
       this.meshes = []
       this.modelMaterial = []
 
+      // Release the parsed model so unloading (or loading a new file) doesn't keep the previous
+      // file's line objects, position data and raw text alive
+      this.gCodeLines = []
+      this.positionTracker.clear()
+      this.sortedPositions = []
+      this.filePosition = 0
+      this.originalFile = undefined
+
       // Note: Don't dispose WASM processor here - it should persist across file loads
+   }
+
+   // Abort an in-progress loadFile at the next chunk boundary
+   cancelLoad() {
+      this.cancelRequested = true
+   }
+
+   private throwIfCancelled() {
+      if (this.cancelRequested) {
+         throw new Error('LOAD_CANCELLED')
+      }
    }
 
    dispose() {
@@ -144,15 +165,17 @@ export default class Processor {
    }
 
    async loadFile(file) {
-      // No file yet (e.g. setPerimeterOnly toggled before anything was loaded) - nothing to parse
+      this.cancelRequested = false
+      this.cleanup()
+      // Empty download - tell the UI so it can drop the loading state instead of waiting for a
+      // fileloaded that never comes. Whitespace-only files parse to zero moves and are caught below
       if (!file) {
+         this.worker.postMessage({ type: 'loaderror', message: 'Empty G-code file' })
          return
       }
       this.originalFile = file
-      this.cleanup()
       // Buffers from a previous WASM load must not leak into this one, otherwise a TS-parsed file would render the previous file's geometry
       this.wasmRenderBuffers = null
-      this.gCodeLines = []
       this.processorProperties = new ProcessorProperties() //Reset for now
       this.processorProperties.slicer = slicerFactory(file)
 
@@ -169,44 +192,65 @@ export default class Processor {
 
       console.log('Processing file')
 
-      // Try WASM processing first for better performance, fallback to TypeScript
-      if (this.wasmProcessor) {
-         await this.loadFileWithWasm(file)
-      } else {
-         console.log('Using TypeScript parser (WASM not enabled)')
-         this.lastProcessingMethod = 'typescript'
-         this.processingStats.method = 'typescript'
-         await this.loadFileStreamed(file)
+      try {
+         // Try WASM processing first for better performance, fallback to TypeScript
+         if (this.wasmProcessor) {
+            await this.loadFileWithWasm(file)
+         } else {
+            console.log('Using TypeScript parser (WASM not enabled)')
+            this.lastProcessingMethod = 'typescript'
+            this.processingStats.method = 'typescript'
+            await this.loadFileStreamed(file)
+         }
+
+         // Calculate total processing time
+         this.processingStats.totalTime = performance.now() - startTime
+
+         // Send processing complete event with statistics
+         this.worker.postMessage({
+            type: 'processingComplete',
+            stats: this.getProcessingStats(),
+         })
+
+         // Log final processing summary
+         const totalLines = this.processingStats.linesProcessed || this.gCodeLines.length
+         const processingSpeed = totalLines / ((this.processingStats.totalTime || 1) / 1000)
+         console.info(
+            `📊 Processing Complete: ${this.processingStats.method.toUpperCase()} method, ${totalLines.toLocaleString()} lines in ${(
+               this.processingStats.totalTime || 0
+            ).toFixed(0)}ms (${Math.round(processingSpeed).toLocaleString()} lines/sec)`,
+         )
+
+         console.info('File Loaded.... Rendering Vertices')
+
+         this.throwIfCancelled()
+
+         // Check if we have WASM render buffers available
+         const wasmBuffers = this.wasmRenderBuffers
+         if (wasmBuffers && wasmBuffers.segmentCount > 0) {
+            console.log(`🚀 Using WASM render buffers directly for ${wasmBuffers.segmentCount} segments`)
+            await this.buildMeshesFromWasmBuffers(wasmBuffers)
+         } else {
+            console.log('📦 Using traditional progressive rendering')
+            await this.testRenderSceneProgressive()
+         }
+      } catch (error) {
+         // A cancel is expected and just leaves an empty scene; anything else is a genuine failure the
+         // UI needs to hear about so it can clear the loading indicator
+         this.cleanup()
+         if (error instanceof Error && error.message === 'LOAD_CANCELLED') {
+            this.worker.postMessage({ type: 'loadcancelled' })
+         } else {
+            console.error('G-code load failed', error)
+            this.worker.postMessage({ type: 'loaderror', message: error instanceof Error ? error.message : String(error) })
+         }
+         return
       }
 
-      // Calculate total processing time
-      this.processingStats.totalTime = performance.now() - startTime
-
-      // Send processing complete event with statistics
-      this.worker.postMessage({
-         type: 'processingComplete',
-         stats: this.getProcessingStats(),
-      })
-
-      // Log final processing summary
-      const totalLines = this.processingStats.linesProcessed || this.gCodeLines.length
-      const processingSpeed = totalLines / ((this.processingStats.totalTime || 1) / 1000)
-      console.info(
-         `📊 Processing Complete: ${this.processingStats.method.toUpperCase()} method, ${totalLines.toLocaleString()} lines in ${(
-            this.processingStats.totalTime || 0
-         ).toFixed(0)}ms (${Math.round(processingSpeed).toLocaleString()} lines/sec)`,
-      )
-
-      console.info('File Loaded.... Rendering Vertices')
-
-      // Check if we have WASM render buffers available
-      const wasmBuffers = this.wasmRenderBuffers
-      if (wasmBuffers && wasmBuffers.segmentCount > 0) {
-         console.log(`🚀 Using WASM render buffers directly for ${wasmBuffers.segmentCount} segments`)
-         await this.buildMeshesFromWasmBuffers(wasmBuffers)
-      } else {
-         console.log('📦 Using traditional progressive rendering')
-         await this.testRenderSceneProgressive()
+      // A file that parsed but produced no renderable lines (only comments/temperatures) has no bounds
+      if (this.gCodeLines.length === 0) {
+         this.worker.postMessage({ type: 'loaderror', message: 'No renderable moves in file' })
+         return
       }
 
       //This is driving picking
@@ -228,11 +272,13 @@ export default class Processor {
 
       this.modelMaterial.forEach((m) => m.setMaxFeedRate(this.processorProperties.maxFeedRate))
       this.modelMaterial.forEach((m) => m.setMinFeedRate(this.processorProperties.minFeedRate))
+      // Re-assert the perimeter-only filter on the freshly built materials (meshes always carry the
+      // full geometry now, so toggling it is a cheap uniform change rather than a reparse)
+      this.modelMaterial.forEach((m) => m.setPerimeterOnly(this.perimeterOnly))
 
-      this.modelMaterial.forEach((m) =>
-         m.updateCurrentFilePosition(this.gCodeLines[this.gCodeLines.length - 1].filePosition),
-      ) //Set it to the end
-      this.gpuPicker.updateCurrentPosition(this.gCodeLines[this.gCodeLines.length - 1].filePosition)
+      const lastPosition = this.gCodeLines[this.gCodeLines.length - 1].filePosition
+      this.modelMaterial.forEach((m) => m.updateCurrentFilePosition(lastPosition)) //Set it to the end
+      this.gpuPicker.updateCurrentPosition(lastPosition)
 
       // Ensure we have valid start/end values
       let startByte = this.processorProperties.firstGCodeByte
@@ -360,6 +406,7 @@ export default class Processor {
 
          // Yield control to prevent blocking UI
          if (chunkEnd < lines.length) {
+            this.throwIfCancelled()
             await new Promise((resolve) => setTimeout(resolve, 0))
          }
       }
@@ -553,6 +600,7 @@ export default class Processor {
 
          // Yield control
          if (chunkEnd < lines.length) {
+            this.throwIfCancelled()
             await new Promise((resolve) => setTimeout(resolve, 0))
          }
       }
@@ -573,10 +621,6 @@ export default class Processor {
 
       for (let idx = 0; idx < this.gCodeLines.length - 1; idx++) {
          const gCodeline = this.gCodeLines[idx] as Move
-         if (this.perimeterOnly && !gCodeline.isPerimeter) {
-            this.gCodeLines[idx] = new Move_Thin(this.processorProperties, gCodeline as Move, null, idx)
-            continue
-         }
          try {
             if (gCodeline.lineType === 'L' && gCodeline.extruding) {
                //Regular move
@@ -639,10 +683,6 @@ export default class Processor {
 
       for (let idx = 0; idx < this.gCodeLines.length - 1; idx++) {
          const gCodeline = this.gCodeLines[idx] as Move
-         if (this.perimeterOnly && !gCodeline.isPerimeter) {
-            this.gCodeLines[idx] = new Move_Thin(this.processorProperties, gCodeline as Move, null, idx)
-            continue
-         }
          try {
             if (gCodeline.lineType === 'L' && gCodeline.extruding) {
                //Regular move
@@ -679,6 +719,7 @@ export default class Processor {
 
             // Yield control every few mesh generations
             if (alphaIndex % 5 === 0) {
+               this.throwIfCancelled()
                await new Promise((resolve) => setTimeout(resolve, 0))
             }
          }
@@ -883,21 +924,19 @@ export default class Processor {
       }
    }
 
-   private updateNozzlePositionInstant(filePosition: number) {
-      if (!this.nozzle || this.positionTracker.size === 0) return
-
-      // Find the closest position in our tracker
-      let closestPosition = null
-      let minDistance = Infinity
-
-      for (const [pos, posData] of this.positionTracker) {
-         const distance = Math.abs(pos - filePosition)
-         if (distance < minDistance) {
-            minDistance = distance
-            closestPosition = posData
-         }
+   // Nearest tracked position to a file offset, via binary search over sortedPositions. Live job
+   // following calls this on every print-head tick, so a linear Map scan would be O(n) per update
+   private closestPositionData(filePosition: number) {
+      if (this.sortedPositions.length === 0) {
+         return null
       }
+      return this.positionTracker.get(this.sortedPositions[this.findClosestPositionIndex(filePosition)]) ?? null
+   }
 
+   private updateNozzlePositionInstant(filePosition: number) {
+      if (!this.nozzle) return
+
+      const closestPosition = this.closestPositionData(filePosition)
       if (closestPosition) {
          this.nozzle.setPosition({
             x: closestPosition.x,
@@ -908,20 +947,9 @@ export default class Processor {
    }
 
    private updateNozzlePositionAnimated(filePosition: number) {
-      if (!this.nozzle || this.positionTracker.size === 0) return
+      if (!this.nozzle) return
 
-      // Find the closest position in our tracker
-      let closestPosition = null
-      let minDistance = Infinity
-
-      for (const [pos, posData] of this.positionTracker) {
-         const distance = Math.abs(pos - filePosition)
-         if (distance < minDistance) {
-            minDistance = distance
-            closestPosition = posData
-         }
-      }
-
+      const closestPosition = this.closestPositionData(filePosition)
       if (closestPosition) {
          // Create a fake Move object for the nozzle animation
          const fakeMove = {
@@ -1054,9 +1082,11 @@ export default class Processor {
       console.log(`📊 Applied WASM buffers to ${mesh.name}: ${segmentCount} instances`)
    }
 
-   async setPerimeterOnly(perimeterOnly) {
+   // Toggles a shader uniform on the existing meshes - the geometry always carries every segment, so
+   // this is a cheap material change with no reparse
+   setPerimeterOnly(perimeterOnly: boolean) {
       this.perimeterOnly = perimeterOnly
-      await this.loadFile(this.originalFile)
+      this.modelMaterial.forEach((m) => m.setPerimeterOnly(perimeterOnly))
    }
 
    showSupports(show) {

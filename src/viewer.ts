@@ -46,6 +46,9 @@ export default class Viewer {
    buildObjects: BuildObjects | null = null
    zTopClipValue: number | null = null
    zBottomClipValue: number | null = null
+   // When false, clicking a rendered line no longer seeks the file position. The live job view turns
+   // this off so the print head can't be scrubbed away from where the printer actually is
+   allowSeek: boolean = true
    offscreen: boolean = true
    lastFrameUpdate: number = 0
    renderTimeout: number = 1000
@@ -255,7 +258,7 @@ export default class Viewer {
                return
             }
             try {
-               if (this.processor.focusedColorId > 10) {
+               if (this.allowSeek && this.processor.focusedColorId > 10) {
                   const pos = this.processor.gCodeLines[this.processor.focusedColorId].filePosition
                   this.processor.updateFilePosition(pos)
                   this.worker.postMessage({ type: 'positionupdate', position: pos })
@@ -380,6 +383,10 @@ export default class Viewer {
             this.scene.clipPlane2 = new Plane(0, -1, 0, this.zBottomClipValue)
          }
       })
+   }
+
+   setAllowSeek(enabled: boolean) {
+      this.allowSeek = enabled
    }
 
    showViewBox(visible: boolean) {

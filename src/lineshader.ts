@@ -46,6 +46,7 @@ export default class LineShaderMaterial {
 
    uniform bool alphaMode;
    uniform bool lineMesh;
+   uniform bool perimeterOnly;
 
    varying vec3 eye_normal;
    flat out vec3 vDiffColor;
@@ -59,8 +60,15 @@ export default class LineShaderMaterial {
    void main()
    {
       #include<instancesVertex>
-  
+
       fIsPerimeter = isPerimeter;
+      bDiscard = 0.;
+
+      // Non-perimeter geometry (infill, travels) is dropped entirely in perimeter-only mode
+      if(perimeterOnly && isPerimeter < 1.0)
+      {
+         bDiscard = 1.;
+      }
 
       switch(renderMode){
             case 0: 
@@ -250,6 +258,7 @@ export default class LineShaderMaterial {
                'progressMode',
                'progressColor',
                'lineMesh',
+               'perimeterOnly',
                'showSupports',
                'showTravels',
                'utime',
@@ -268,6 +277,7 @@ export default class LineShaderMaterial {
             .setVector4('progressColor', new Vector4(0, 1, 0, 1))
             .setFloat('alphaValue', 0.05)
             .setBool('showTravels', false)
+            .setBool('perimeterOnly', false)
             .setBool('lineMesh', false) // Default to false (lighting enabled)
       })
 
@@ -347,6 +357,12 @@ export default class LineShaderMaterial {
    setShowTravels(show: boolean) {
       this.material.onBindObservable.addOnce(() => {
          this.material.getEffect()?.setBool('showTravels', show)
+      })
+   }
+
+   setPerimeterOnly(mode: boolean) {
+      this.material.onBindObservable.addOnce(() => {
+         this.material.getEffect()?.setBool('perimeterOnly', mode)
       })
    }
 
