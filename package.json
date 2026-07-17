@@ -1,6 +1,6 @@
 {
   "name": "@duet3d/gcodeviewer",
-  "version": "3.7.0-alpha.1",
+  "version": "3.7.0-alpha.2",
   "description": "G-code viewer and processor library with Babylon.js rendering and a Rust/WASM parsing fast path",
   "main": "./dist/index.cjs.js",
   "module": "./dist/index.es.js",
