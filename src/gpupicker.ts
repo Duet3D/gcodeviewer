@@ -15,6 +15,10 @@ export default class GPUPicker {
    colorTestCallBack: any
    currentPosition: number = 0
    renderTargetMeshs: Mesh[] = []
+   // Reused across frames - the readback runs every rendered frame, so a fresh framebuffer per call
+   // would pile up GL objects faster than the GC reclaims them
+   pickFrameBuffer: WebGLFramebuffer | null = null
+   pickPixelBuffer = new Uint8Array(4)
 
    //  shaderMaterial: CustomMaterial
    shaderMaterial: ShaderMaterial
@@ -25,9 +29,20 @@ export default class GPUPicker {
       this.height = height
       this.renderTarget = new RenderTargetTexture('rt', { width, height }, this.scene, true)
       this.renderTarget.clearColor = new Color4(0, 0, 0, 0)
-      this.renderTarget.refreshRate = 1
+      // Rendering the pick target redraws the entire model and stalls on a synchronous readPixels,
+      // so it only runs on demand (requestPick) instead of every frame
+      this.renderTarget.refreshRate = RenderTargetTexture.REFRESHRATE_RENDER_ONCE
       this.scene.customRenderTargets.push(this.renderTarget)
-      console.log(this.scene.customRenderTargets)
+
+      let lastPointerX = -1
+      let lastPointerY = -1
+      this.scene.onBeforeRenderObservable.add(() => {
+         if (this.scene.pointerX !== lastPointerX || this.scene.pointerY !== lastPointerY) {
+            lastPointerX = this.scene.pointerX
+            lastPointerY = this.scene.pointerY
+            this.requestPick()
+         }
+      })
       this.shaderMaterial = new ShaderMaterial(
          'pick_mat',
          this.scene,
@@ -59,44 +74,44 @@ export default class GPUPicker {
          }
       })
       this.renderTarget.onAfterRenderObservable.add(() => {
-         const x = Math.round(this.scene.pointerX)
-         const y = this.height - Math.round(this.scene.pointerY)
-
-         const pixels = this.readTexturePixels(
-            this.engine._gl,
-            this.renderTarget._texture._hardwareTexture.underlyingResource,
-            x,
-            y,
-            1,
-            1,
-         )
+         if (this.renderTargetMeshs.length === 0) {
+            return
+         }
 
          if (this.colorTestCallBack) {
-            this.colorTestCallBack(pixels)
+            const x = Math.round(this.scene.pointerX)
+            const y = this.height - Math.round(this.scene.pointerY)
+            this.colorTestCallBack(this.readTexturePixels(this.engine._gl, this.renderTarget._texture._hardwareTexture.underlyingResource, x, y))
          }
-         if (this.renderTargetMeshs) {
-            if (!isEnabled) this.renderTargetMeshs.forEach((m) => m.setEnabled(false))
-         } else {
-            //console.log('no target')
-         }
+
+         if (!isEnabled) this.renderTargetMeshs.forEach((m) => m.setEnabled(false))
       })
    }
 
-   readTexturePixels(gl, texture, x, y, w, h) {
-      const frameBuffer = gl.createFramebuffer()
-      const pixels = new Uint8Array(w * h * 4)
+   readTexturePixels(gl, texture, x, y) {
+      if (!this.pickFrameBuffer) {
+         this.pickFrameBuffer = gl.createFramebuffer()
+      }
 
-      gl.bindFramebuffer(gl.FRAMEBUFFER, frameBuffer)
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.pickFrameBuffer)
       gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0)
-      gl.readPixels(x, y, w, h, gl.RGBA, gl.UNSIGNED_BYTE, pixels)
+      gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, this.pickPixelBuffer)
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null)
 
-      return pixels
+      return this.pickPixelBuffer
+   }
+
+   // Schedule one pick-target render on the next frame. Anything that changes what sits under the
+   // pointer must call this: pointer movement, camera movement, file position, clip planes, meshes
+   requestPick() {
+      this.renderTarget.resetRefreshCounter()
    }
 
    updateRenderTargetSize(width, height) {
       this.width = width
       this.height = height
       this.renderTarget.resize({ width, height })
+      this.requestPick()
    }
 
    clearRenderList() {
@@ -108,11 +123,13 @@ export default class GPUPicker {
       this.renderTargetMeshs.push(mesh)
       this.renderTarget.setMaterialForRendering(this.renderTargetMeshs, this.shaderMaterial)
       this.renderTarget.renderList.push(mesh)
+      this.requestPick()
    }
 
    updateCurrentPosition(currentPosition: number) {
       this.currentPosition = currentPosition
       this.shaderMaterial.setFloat('currentPosition', this.currentPosition)
+      this.requestPick()
    }
 }
 

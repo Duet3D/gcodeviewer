@@ -118,6 +118,9 @@ pub struct RenderBuffers {
     segment_count: u32,
 }
 
+// Buffers are moved out (std::mem::take) rather than cloned: each take_* call transfers the Vec
+// across the wasm boundary exactly once and leaves an empty Vec behind, halving peak memory for
+// large files. Callers read each buffer once and then free() the object
 #[wasm_bindgen]
 impl RenderBuffers {
     #[wasm_bindgen(getter)]
@@ -125,44 +128,36 @@ impl RenderBuffers {
         self.segment_count
     }
 
-    #[wasm_bindgen(getter)]
-    pub fn matrix_data(&self) -> Vec<f32> {
-        self.matrix_data.clone()
+    pub fn take_matrix_data(&mut self) -> Vec<f32> {
+        std::mem::take(&mut self.matrix_data)
     }
 
-    #[wasm_bindgen(getter)]
-    pub fn color_data(&self) -> Vec<f32> {
-        self.color_data.clone()
+    pub fn take_color_data(&mut self) -> Vec<f32> {
+        std::mem::take(&mut self.color_data)
     }
 
-    #[wasm_bindgen(getter)]
-    pub fn pick_data(&self) -> Vec<f32> {
-        self.pick_data.clone()
+    pub fn take_pick_data(&mut self) -> Vec<f32> {
+        std::mem::take(&mut self.pick_data)
     }
 
-    #[wasm_bindgen(getter)]
-    pub fn file_position_data(&self) -> Vec<f32> {
-        self.file_position_data.clone()
+    pub fn take_file_position_data(&mut self) -> Vec<f32> {
+        std::mem::take(&mut self.file_position_data)
     }
 
-    #[wasm_bindgen(getter)]
-    pub fn file_end_position_data(&self) -> Vec<f32> {
-        self.file_end_position_data.clone()
+    pub fn take_file_end_position_data(&mut self) -> Vec<f32> {
+        std::mem::take(&mut self.file_end_position_data)
     }
 
-    #[wasm_bindgen(getter)]
-    pub fn tool_data(&self) -> Vec<f32> {
-        self.tool_data.clone()
+    pub fn take_tool_data(&mut self) -> Vec<f32> {
+        std::mem::take(&mut self.tool_data)
     }
 
-    #[wasm_bindgen(getter)]
-    pub fn feed_rate_data(&self) -> Vec<f32> {
-        self.feed_rate_data.clone()
+    pub fn take_feed_rate_data(&mut self) -> Vec<f32> {
+        std::mem::take(&mut self.feed_rate_data)
     }
 
-    #[wasm_bindgen(getter)]
-    pub fn is_perimeter_data(&self) -> Vec<f32> {
-        self.is_perimeter_data.clone()
+    pub fn take_is_perimeter_data(&mut self) -> Vec<f32> {
+        std::mem::take(&mut self.is_perimeter_data)
     }
 }
 
@@ -296,6 +291,7 @@ pub struct GCodeProcessor {
     processor: FileProcessor,
     position_tracker: HashMap<u32, PositionData>,
     sorted_positions: Vec<u32>,
+    render_segments: Vec<PositionData>,
 }
 
 #[wasm_bindgen]
@@ -303,44 +299,43 @@ impl GCodeProcessor {
     #[wasm_bindgen(constructor)]
     pub fn new() -> GCodeProcessor {
         console_log!("Creating new GCodeProcessor");
-        
+
         GCodeProcessor {
             processor: FileProcessor::new(),
             position_tracker: HashMap::new(),
             sorted_positions: Vec::new(),
+            render_segments: Vec::new(),
         }
     }
-    
+
     /// Process G-code file and return results
     #[wasm_bindgen]
-    pub fn process_file(&mut self, 
-                       file_content: &str, 
+    pub fn process_file(&mut self,
+                       file_content: &str,
                        progress_callback: Option<ProgressCallback>) -> ProcessingResult {
         let start_time = js_sys::Date::now();
-        
+
         console_log!("Starting to process file with {} bytes", file_content.len());
-        
+
         // Clear previous data
-        self.position_tracker.clear();
-        self.sorted_positions.clear();
-        
+        self.clear_data();
+
         // Process the file
         match self.processor.process_file_content(file_content, progress_callback) {
-            Ok((gcode_lines, positions)) => {
+            Ok((gcode_lines, positions, render_segments)) => {
                 // Store position data
-                self.position_tracker = positions.into_iter()
-                    .map(|(pos, data)| (pos, data))
-                    .collect();
-                
+                self.position_tracker = positions;
+                self.render_segments = render_segments;
+
                 // Sort positions for animation
                 self.sorted_positions = self.position_tracker.keys().cloned().collect();
                 self.sorted_positions.sort();
-                
+
                 let processing_time = js_sys::Date::now() - start_time;
-                
-                console_log!("File processing completed: {} lines, {} positions, {:.2}ms", 
+
+                console_log!("File processing completed: {} lines, {} positions, {:.2}ms",
                            gcode_lines.len(), self.position_tracker.len(), processing_time);
-                
+
                 ProcessingResult {
                     success: true,
                     error_message: String::new(),
@@ -351,7 +346,7 @@ impl GCodeProcessor {
             }
             Err(error) => {
                 console_log!("File processing failed: {}", error);
-                
+
                 ProcessingResult {
                     success: false,
                     error_message: error,
@@ -362,63 +357,43 @@ impl GCodeProcessor {
             }
         }
     }
-    
-    /// Get position data for a specific file position
+
+    /// All tracked positions as one packed buffer, sorted by file position:
+    /// [file_position, x, y, z, feed_rate, extruding] per entry. One boundary crossing instead of
+    /// one wasm object per move
     #[wasm_bindgen]
-    pub fn get_position_data(&self, file_position: u32) -> Option<PositionData> {
-        self.position_tracker.get(&file_position).cloned()
-    }
-    
-    /// Get all sorted positions (for animation)
-    #[wasm_bindgen]
-    pub fn get_sorted_positions(&self) -> Vec<u32> {
-        self.sorted_positions.clone()
-    }
-    
-    /// Get position count
-    #[wasm_bindgen]
-    pub fn get_position_count(&self) -> usize {
-        self.position_tracker.len()
-    }
-    
-    /// Find closest position to a target file position
-    #[wasm_bindgen]
-    pub fn find_closest_position(&self, target_position: u32) -> Option<u32> {
-        if self.sorted_positions.is_empty() {
-            return None;
-        }
-        
-        // Binary search for closest position
-        match self.sorted_positions.binary_search(&target_position) {
-            Ok(index) => Some(self.sorted_positions[index]),
-            Err(index) => {
-                if index == 0 {
-                    Some(self.sorted_positions[0])
-                } else if index >= self.sorted_positions.len() {
-                    Some(self.sorted_positions[self.sorted_positions.len() - 1])
-                } else {
-                    // Find closest between index-1 and index
-                    let left = self.sorted_positions[index - 1];
-                    let right = self.sorted_positions[index];
-                    
-                    if target_position - left <= right - target_position {
-                        Some(left)
-                    } else {
-                        Some(right)
-                    }
-                }
+    pub fn get_position_buffer(&self) -> Vec<f64> {
+        let mut buffer = Vec::with_capacity(self.sorted_positions.len() * 6);
+        for &position in &self.sorted_positions {
+            if let Some(pos) = self.position_tracker.get(&position) {
+                buffer.push(position as f64);
+                buffer.push(pos.x);
+                buffer.push(pos.y);
+                buffer.push(pos.z);
+                buffer.push(pos.feed_rate);
+                buffer.push(if pos.extruding { 1.0 } else { 0.0 });
             }
         }
+        buffer
+    }
+
+    /// Free the parsed data once JS has copied everything it needs. Linear memory never shrinks,
+    /// but this lets the next load reuse the space instead of growing further
+    #[wasm_bindgen]
+    pub fn clear_data(&mut self) {
+        self.position_tracker = HashMap::new();
+        self.sorted_positions = Vec::new();
+        self.render_segments = Vec::new();
     }
 
     /// Generate render buffers for fast mesh creation in JavaScript
     #[wasm_bindgen]
     pub fn generate_render_buffers(&self, nozzle_size: f32, padding: f32, progress_callback: Option<ProgressCallback>) -> RenderBuffers {
         let start_time = js_sys::Date::now();
-        console_log!("Generating render buffers for {} positions", self.position_tracker.len());
+        console_log!("Generating render buffers for {} segments", self.render_segments.len());
 
         // Pre-allocate vectors with estimated capacity
-        let capacity = self.position_tracker.len();
+        let capacity = self.render_segments.len();
         let mut matrix_data = Vec::with_capacity(capacity * 16); // 4x4 matrix = 16 floats
         let mut color_data = Vec::with_capacity(capacity * 4);   // RGBA = 4 floats
         let mut pick_data = Vec::with_capacity(capacity * 3);   // RGB = 3 floats per segment
@@ -429,41 +404,44 @@ impl GCodeProcessor {
         let mut is_perimeter_data = Vec::with_capacity(capacity);
 
         let mut segment_count = 0u32;
-        let total_positions = self.sorted_positions.len();
-        let mut processed_positions = 0usize;
+        let total_segments = self.render_segments.len();
+        let mut processed_segments = 0usize;
         let mut last_progress_report = 0f64;
 
-        // Process positions in sorted order for consistency
-        for &position in &self.sorted_positions {
-            if let Some(pos_data) = self.position_tracker.get(&position) {
-                // Include both extruding and travel moves
-                    // Calculate matrix components (equivalent to TypeScript renderLine())
-                    let (matrix, color) = self.calculate_render_matrix(pos_data, nozzle_size, padding);
-                    
-                    // Add matrix data (16 floats for 4x4 matrix in column-major order)
-                    matrix_data.extend_from_slice(&matrix);
-                    
-                    // Add color data (RGBA)
-                    color_data.extend_from_slice(&color);
-                    
-                    // Add other buffer data
-                    let color_id = Self::num_to_color(pos_data.line_number);
-                    pick_data.extend_from_slice(&color_id); // RGB color for picking (matches TypeScript colorId/255)
-                    file_position_data.push(position as f32);
-                    file_end_position_data.push(pos_data.file_end_position as f32);
-                    tool_data.push(pos_data.tool as f32);
-                    feed_rate_data.push(pos_data.feed_rate as f32);
-                    is_perimeter_data.push(if pos_data.is_perimeter { 1.0 } else { 0.0 });
+        // render_segments is already in file order and contains every tessellated arc piece
+        for pos_data in &self.render_segments {
+            processed_segments += 1;
 
-                    segment_count += 1;
+            // Zero-length moves (E-only retracts/recoveries) have no direction; rendering them
+            // would place unit-scale boxes at the seam positions
+            if pos_data.length < 1e-9 {
+                continue;
             }
-            
-            processed_positions += 1;
-            
-            // Report progress every 5% or every 10000 positions to avoid callback overhead
-            if processed_positions % 10000 == 0 || processed_positions % (total_positions / 20).max(1) == 0 {
-                let progress = processed_positions as f64 / total_positions as f64;
-                
+
+            // Calculate matrix components (equivalent to TypeScript renderLine())
+            let (matrix, color) = self.calculate_render_matrix(pos_data, nozzle_size, padding);
+
+            // Add matrix data (16 floats for 4x4 matrix in column-major order)
+            matrix_data.extend_from_slice(&matrix);
+
+            // Add color data (RGBA)
+            color_data.extend_from_slice(&color);
+
+            // Add other buffer data
+            let color_id = Self::num_to_color(pos_data.line_number);
+            pick_data.extend_from_slice(&color_id); // RGB color for picking (matches TypeScript colorId/255)
+            file_position_data.push(pos_data.file_position as f32);
+            file_end_position_data.push(pos_data.file_end_position as f32);
+            tool_data.push(pos_data.tool as f32);
+            feed_rate_data.push(pos_data.feed_rate as f32);
+            is_perimeter_data.push(if pos_data.is_perimeter { 1.0 } else { 0.0 });
+
+            segment_count += 1;
+
+            // Report progress every 5% or every 10000 segments to avoid callback overhead
+            if processed_segments % 10000 == 0 || processed_segments % (total_segments / 20).max(1) == 0 {
+                let progress = processed_segments as f64 / total_segments as f64;
+
                 // Only report if progress changed significantly
                 if progress - last_progress_report >= 0.05 {
                     if let Some(ref callback) = progress_callback {
@@ -476,7 +454,7 @@ impl GCodeProcessor {
 
         let processing_time = js_sys::Date::now() - start_time;
         console_log!("Generated {} render segments in {:.2}ms", segment_count, processing_time);
-        
+
         // Report completion
         if let Some(ref callback) = progress_callback {
             callback.call(1.0, "Render objects complete");
@@ -633,56 +611,8 @@ impl GCodeProcessor {
     }
 }
 
-// Utility function for performance testing
-#[wasm_bindgen]
-pub fn benchmark_parsing(file_content: &str, iterations: usize) -> f64 {
-    let mut total_time = 0.0;
-    
-    for _ in 0..iterations {
-        let start = js_sys::Date::now();
-        let mut processor = FileProcessor::new();
-        let _ = processor.process_file_content(file_content, None);
-        total_time += js_sys::Date::now() - start;
-    }
-    
-    total_time / iterations as f64
-}
-
 // Export version information
 #[wasm_bindgen]
 pub fn get_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
-}
-
-// Test function to validate matrix calculation
-#[wasm_bindgen]
-pub fn test_matrix_calculation() -> String {
-    // Create a test move from (0,0,0) to (10,0,0) - simple horizontal line
-    let test_pos = PositionData::new_complete(
-        0.0, 0.0, 0.0,    // start
-        10.0, 0.0, 0.0,   // end  
-        1500.0,           // feed_rate
-        true,             // extruding
-        0.2,              // layer_height
-        true              // is_perimeter
-    );
-    
-    let processor = GCodeProcessor::new();
-    let (matrix, _color) = processor.calculate_render_matrix(&test_pos, 0.4, 0.0);
-    
-    // Format results for inspection - show key elements of transformation matrix
-    format!(
-        "Test Move: (0,0,0) → (10,0,0)\nLength: {:.3}\nScale vector (diagonal): X={:.3}, Y={:.3}, Z={:.3}\nRotation+Scale matrix:\n[{:.3}, {:.3}, {:.3}]\n[{:.3}, {:.3}, {:.3}]\n[{:.3}, {:.3}, {:.3}]\nTranslation: [{:.3}, {:.3}, {:.3}]",
-        test_pos.length,
-        // Extract scaling from the rotated/scaled basis vectors (length of columns)
-        (matrix[0] * matrix[0] + matrix[1] * matrix[1] + matrix[2] * matrix[2]).sqrt(),
-        (matrix[4] * matrix[4] + matrix[5] * matrix[5] + matrix[6] * matrix[6]).sqrt(), 
-        (matrix[8] * matrix[8] + matrix[9] * matrix[9] + matrix[10] * matrix[10]).sqrt(),
-        // Show the 3x3 rotation+scale part
-        matrix[0], matrix[4], matrix[8],
-        matrix[1], matrix[5], matrix[9],
-        matrix[2], matrix[6], matrix[10],
-        // Translation vector
-        matrix[12], matrix[13], matrix[14]
-    )
 }

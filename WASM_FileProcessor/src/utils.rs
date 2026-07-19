@@ -312,8 +312,10 @@ pub enum ArcPlane {
     YZ,
 }
 
-/// Generate tessellated points for G2/G3 arc moves
-/// Equivalent to TypeScript's doArc function
+/// Generate tessellated points for G2/G3 arc moves, equivalent to TypeScript's doArc.
+/// Positions are in the Babylon frame (x = G-code X, y = height, z = G-code Y) and must already be
+/// fully resolved (workplace offsets applied by the parser). Offsets i/j/k are G-code X/Y/Z center
+/// offsets from the start point
 pub fn tessellate_arc(
     current_position: Vector3,
     target_position: Vector3,
@@ -325,40 +327,23 @@ pub fn tessellate_arc(
     arc_plane: ArcPlane,
     arc_segment_length: f64,
     fix_radius: bool,
-    relative_move: bool,
-    workplace_offset: Vector3,
 ) -> Result<ArcResult, String> {
-    
-    let mut current = current_position;
-    let mut target = target_position;
-    
-    // Apply workplace offset if not relative
-    if !relative_move {
-        target.x += workplace_offset.x;
-        target.y += workplace_offset.y;
-        target.z += workplace_offset.z;
-    }
-    
-    let mut i = i_offset;
-    let mut j = j_offset;
-    let mut k = k_offset.unwrap_or(0.0);
-    
-    // Define axes based on arc plane
-    let (axis0_idx, axis1_idx, axis2_idx) = match arc_plane {
-        ArcPlane::XY => (0, 1, 2), // x, y, z
-        ArcPlane::XZ => (2, 0, 1), // z, x, y (inverted for correct direction per RRF)
-        ArcPlane::YZ => (1, 2, 0), // y, z, x
+
+    let current = current_position;
+    let target = target_position;
+
+    let k = k_offset.unwrap_or(0.0);
+
+    // Work in G-code axes (x, y, z-up); positions convert back to the Babylon frame on output.
+    // G17 (XY) uses I/J, G18 (XZ) uses I/K, G19 (YZ) uses J/K as (axis0, axis1) center offsets
+    let (axis0_idx, axis1_idx, axis2_idx, mut i, mut j) = match arc_plane {
+        ArcPlane::XY => (0, 1, 2, i_offset, j_offset),
+        ArcPlane::XZ => (2, 0, 1, k, i_offset), // axis0 = Z inverted for correct direction per RRF
+        ArcPlane::YZ => (1, 2, 0, j_offset, k),
     };
-    
-    // For XZ plane, swap i and j
-    if matches!(arc_plane, ArcPlane::XZ) {
-        let temp = j;
-        j = i;
-        i = temp;
-    }
-    
-    let current_array = [current.x, current.y, current.z];
-    let target_array = [target.x, target.y, target.z];
+
+    let current_array = [current.x, current.z, current.y];
+    let target_array = [target.x, target.z, target.y];
     
     // Handle radius-based arc specification (R parameter)
     if let Some(r) = radius {
@@ -368,7 +353,7 @@ pub fn tessellate_arc(
         let d_squared = delta0 * delta0 + delta1 * delta1;
         if d_squared == 0.0 {
             return Ok(ArcResult {
-                final_position: current,
+                final_position: target,
                 intermediate_points: vec![],
             });
         }
@@ -401,7 +386,7 @@ pub fn tessellate_arc(
         // Center point is offset from current position
         if i == 0.0 && j == 0.0 {
             return Ok(ArcResult {
-                final_position: current,
+                final_position: target,
                 intermediate_points: vec![],
             });
         }
@@ -458,13 +443,13 @@ pub fn tessellate_arc(
         let p1 = center1 + arc_radius * current_angle.sin();
         p2 += axis2_step;
         
-        // Convert back to world coordinates based on arc plane
+        // Map the in-plane point back to G-code axes, then to the Babylon frame (x, height, G-code Y)
         let world_point = match arc_plane {
-            ArcPlane::XY => Vector3 { x: p0, y: p1, z: p2 },
-            ArcPlane::XZ => Vector3 { x: p1, y: p2, z: p0 },
-            ArcPlane::YZ => Vector3 { x: p2, y: p0, z: p1 },
+            ArcPlane::XY => Vector3 { x: p0, y: p2, z: p1 },
+            ArcPlane::XZ => Vector3 { x: p1, y: p0, z: p2 },
+            ArcPlane::YZ => Vector3 { x: p2, y: p1, z: p0 },
         };
-        
+
         points.push(world_point);
     }
     

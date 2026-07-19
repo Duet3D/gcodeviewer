@@ -15,6 +15,9 @@ self.addEventListener('message', async (message) => {
             addEventListener: (event, fn, opt) => {
                self.viewer.bindHandler('window', event, fn, opt)
             },
+            // Engine.dispose detaches its listeners from window and document; the event bridge has
+            // no unbind path and the proxy drops the real DOM listeners on unload, so no-ops suffice
+            removeEventListener: () => {},
             setTimeout: self.setTimeout.bind(self),
             PointerEvent: true,
          }
@@ -23,6 +26,7 @@ self.addEventListener('message', async (message) => {
             addEventListener: (event, fn, opt) => {
                self.viewer.bindHandler('document', event, fn, opt)
             },
+            removeEventListener: () => {},
             // Babylon probes document.createElement for wheel support and uses it to create 2D canvases
             // for DynamicTexture, so canvas requests must return a real OffscreenCanvas
             createElement: function (tagName) {
@@ -48,6 +52,9 @@ self.addEventListener('message', async (message) => {
       case 'resize': //Resize event was fired
          self.viewer.setSizes(message.data.width, message.data.height)
          break
+      case 'visibility':
+         self.viewer.documentHidden = message.data.hidden
+         break
       case 'loadFile':
          self.viewer.loadFile(message.data.file)
          break
@@ -68,9 +75,6 @@ self.addEventListener('message', async (message) => {
          break
       case 'rendermode':
          self.viewer.processor.modelMaterial.forEach((m) => m.updateRenderMode(message.data.mode))
-         break
-      case 'updatecolortest':
-         await self.viewer.processor.updateColorTest()
          break
       case 'updatefileposition':
          self.viewer.processor.updateFilePosition(message.data.position, message.data.animate || false)

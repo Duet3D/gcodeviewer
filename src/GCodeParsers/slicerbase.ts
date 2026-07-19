@@ -1,4 +1,3 @@
-import ProcessorProperties from '../processorproperties'
 export default abstract class SlicerBase {
    feature = ''
    currentFeatureColor = [1, 1, 1, 1]
@@ -28,6 +27,4 @@ export default abstract class SlicerBase {
          this.missingFeatures.push(featureName)
       }
    }
-
-   processComments(file: string[], props: ProcessorProperties) {}
 }

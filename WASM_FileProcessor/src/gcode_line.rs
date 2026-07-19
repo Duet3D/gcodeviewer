@@ -191,7 +191,8 @@ pub struct ArcMove {
     pub start: Vector3,
     pub end: Vector3,
     pub center: Vector3,
-    pub radius: f64,
+    // The raw R parameter when specified; arcs defined via I/J/K offsets carry None
+    pub radius: Option<f64>,
     pub clockwise: bool,
     pub extruding: bool,
     pub color: Color4,
@@ -209,7 +210,7 @@ impl ArcMove {
             start: Vector3::zero(),
             end: Vector3::zero(),
             center: Vector3::zero(),
-            radius: 0.0,
+            radius: None,
             clockwise: false,
             extruding: false,
             color: Color4::white(),

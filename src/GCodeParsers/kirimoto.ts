@@ -1,4 +1,3 @@
-import ProcessorProperties from '../processorproperties'
 import SlicerBase from './slicerbase'
 
 export default class KiriMoto extends SlicerBase {
@@ -49,5 +48,4 @@ export default class KiriMoto extends SlicerBase {
       return this.currentIsSupport
    }
 
-   processHeader(file: string[], props: ProcessorProperties) {}
 }

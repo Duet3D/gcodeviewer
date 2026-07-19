@@ -1,18 +1,20 @@
 use crate::gcode_line::{GCodeLine, CommandData};
 use crate::processor_properties::ProcessorProperties;
 
-/// Parse G10 (Firmware Retraction) command
-/// G10: Enable firmware retraction (retract filament)
+/// Parse G10. Bare G10 is firmware retraction; with parameters (P/L/R/S/X/Y/Z) it sets tool or
+/// workplace offsets and standby temperatures - untracked state, but not a retract
 pub fn parse_g10_retract(
     properties: &mut ProcessorProperties,
     line: &str,
     file_position: u32,
     line_number: u32,
 ) -> Result<GCodeLine, String> {
-    
-    // Enable firmware retraction
-    properties.firmware_retraction = true;
-    
+
+    let rest = line.trim()[3..].trim();
+    if rest.is_empty() || rest.starts_with(';') {
+        properties.firmware_retraction = true;
+    }
+
     // Create command data
     let cmd_data = CommandData::new(file_position, line_number, line.to_string(), "G10".to_string());
     Ok(GCodeLine::Command(cmd_data))

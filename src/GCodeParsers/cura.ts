@@ -1,4 +1,3 @@
-import ProcessorProperties from '../processorproperties'
 import SlicerBase from './slicerbase'
 
 export default class Cura extends SlicerBase {
@@ -47,5 +46,4 @@ export default class Cura extends SlicerBase {
       return this.currentIsSupport
    }
 
-   processHeader(file: string[], props: ProcessorProperties) {}
 }

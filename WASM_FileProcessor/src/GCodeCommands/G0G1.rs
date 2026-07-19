@@ -26,6 +26,7 @@ pub fn parse_g0_g1_move(
     let mut f: Option<f64> = None;
     let mut is_g1 = false;
     let mut force_absolute = false;
+    let unit = props.units_multiplier();
     
     // Parse the line character by character for maximum speed
     let mut i = 0;
@@ -59,6 +60,7 @@ pub fn parse_g0_g1_move(
                     }
                 }
                 'X' => {
+                    let value = value * unit;
                     if props.z_belt {
                         // For Z-belt, X coordinate is absolute
                         x = value;
@@ -71,13 +73,14 @@ pub fn parse_g0_g1_move(
                     }
                 }
                 'Y' => {
+                    let value = value * unit;
                     if props.z_belt {
                         // For Z-belt, Y value is transformed
                         let new_y = value * props.hyp;
                         y = new_y;
                         z = props.current_z + new_y * props.adj;
                     } else {
-                        // CRITICAL FIX: Y coordinate goes to Z position (matching TypeScript line 47-50)
+                        // Y coordinate goes to the Z slot (G-code Z-up vs Babylon Y-up)
                         z = if props.absolute_positioning || force_absolute {
                             value + props.current_workplace().y
                         } else {
@@ -86,12 +89,13 @@ pub fn parse_g0_g1_move(
                     }
                 }
                 'Z' => {
+                    let value = value * unit;
                     if props.z_belt {
                         // For Z-belt, Z value updates current_z and recalculates Z
                         props.current_z = -value;
                         z = props.current_z + y * props.adj;
                     } else {
-                        // CRITICAL FIX: Z coordinate goes to Y position (matching TypeScript line 58-61)
+                        // Z coordinate goes to the Y slot (G-code Z-up vs Babylon Y-up)
                         y = if props.absolute_positioning || force_absolute {
                             value + props.current_workplace().z
                         } else {
@@ -156,14 +160,15 @@ pub fn parse_g0_g1_move(
         move_data.tool = 255; // Travel moves use tool 255
     }
     
-    // Handle feed rate
+    // F is modal for the whole line regardless of token order and extrusion state
     if let Some(f_value) = f {
-        if move_data.extruding {
-            props.update_feed_rate(f_value);
-        }
+        props.set_feed_rate(f_value * unit);
     }
-    
+
     move_data.feed_rate = props.current_feed_rate;
+    if move_data.extruding {
+        props.record_extrusion_feed_rate(move_data.feed_rate);
+    }
     
     // Update height tracking
     props.update_height(move_data.end.z);
@@ -196,17 +201,17 @@ pub fn is_g0_g1_command(line: &str) -> bool {
         return false;
     }
     
-    // Check for G0, G1, G00, G01
+    // Check for G0, G1, G00, G01. A digit after "G1" must NOT match - that would swallow G10
+    // (retract / offset setting) as a move
     match bytes[1] {
         b'0' => {
-            // G0 or G00
-            bytes.len() == 2 || bytes[2] == b' ' || 
-            (bytes.len() > 2 && bytes[2] == b'0' && (bytes.len() == 3 || bytes[3] == b' '))
+            // G0, G00 or G01
+            bytes.len() == 2 || bytes[2] == b' ' ||
+            ((bytes[2] == b'0' || bytes[2] == b'1') && (bytes.len() == 3 || bytes[3] == b' '))
         }
         b'1' => {
-            // G1 or G01  
-            bytes.len() == 2 || bytes[2] == b' ' ||
-            (bytes.len() > 2 && bytes[2] == b'0' && (bytes.len() == 3 || bytes[3] == b' '))
+            // G1 only
+            bytes.len() == 2 || bytes[2] == b' '
         }
         _ => false,
     }
@@ -256,6 +261,8 @@ mod tests {
         assert!(is_g0_g1_command("g1 y20"));
         
         assert!(!is_g0_g1_command("G2 X10 Y20"));
+        assert!(!is_g0_g1_command("G10 P1 X5 Y5"));
+        assert!(!is_g0_g1_command("G10"));
         assert!(!is_g0_g1_command("M104 S200"));
         assert!(!is_g0_g1_command("; comment"));
         assert!(!is_g0_g1_command(""));

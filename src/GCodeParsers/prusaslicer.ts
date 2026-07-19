@@ -1,4 +1,3 @@
-import ProcessorProperties from '../processorproperties'
 import SlicerBase from './slicerbase'
 
 export default class PrusaSlicer extends SlicerBase {
@@ -90,26 +89,5 @@ export default class PrusaSlicer extends SlicerBase {
 
    isSupport(): boolean {
       return this.currentIsSupport
-   }
-
-   processHeader(file: string[], props: ProcessorProperties) {
-      try {
-         for (let lineIdx = file.length - 350; lineIdx < file.length - 1; lineIdx++) {
-            const line = file[lineIdx]
-
-            //Pull out the nozzle diameter for each tool
-            if (line.includes('nozzle_diameter')) {
-               const equalSign = line.indexOf('=') + 1
-               const diameters = line.substring(equalSign).split(',')
-               for (let toolIdx = 0; toolIdx < diameters.length; toolIdx++) {
-                  if (props.tools.length < toolIdx) {
-                     props.tools[toolIdx].diameter = Number(diameters[toolIdx])
-                  }
-               }
-            }
-         }
-      } catch (e) {
-         console.error(e)
-      }
    }
 }

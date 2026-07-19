@@ -4,17 +4,26 @@ use crate::GCodeCommands::ProcessLine::process_line;
 use crate::slicers::detect_slicer;
 use crate::{PositionData, ProgressCallback};
 use std::collections::HashMap;
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
 // Console logging for WASM
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 extern "C" {
     #[wasm_bindgen(js_namespace = console)]
     fn log(s: &str);
 }
 
+// wasm-bindgen imports panic when called on native targets, which breaks `cargo test`
+#[cfg(target_arch = "wasm32")]
 macro_rules! console_log {
     ($($t:tt)*) => (log(&format_args!($($t)*).to_string()))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+macro_rules! console_log {
+    ($($t:tt)*) => (println!($($t)*))
 }
 
 /// High-performance file processor optimized for WASM
@@ -29,63 +38,71 @@ impl FileProcessor {
         }
     }
     
-    /// Process G-code file content and return parsed lines and position data
-    /// Returns (gcode_lines, position_tracker)
+    /// Process G-code file content.
+    /// Returns (gcode_lines, position_tracker, render_segments): the tracker maps line file
+    /// positions to their end state for animation, render_segments lists every renderable segment
+    /// (arcs contribute one entry per tessellated piece) in file order for buffer generation
     pub fn process_file_content(
         &mut self,
         file_content: &str,
         progress_callback: Option<ProgressCallback>,
-    ) -> Result<(Vec<GCodeLine>, HashMap<u32, PositionData>), String> {
-        
+    ) -> Result<(Vec<GCodeLine>, HashMap<u32, PositionData>, Vec<PositionData>), String> {
+
         // Reset processor state for new file
         self.properties.reset();
-        
+
         // Detect slicer type and initialize colors
         let slicer = detect_slicer(file_content);
         self.properties.slicer_name = slicer.get_name().to_string();
-        
+
         // Initialize default feature color from slicer
         self.properties.current_feature_color = slicer.get_feature_color(&crate::slicers::slicer_base::FeatureType::Perimeter);
-        
+
         // Estimate processing parameters
         let file_length = file_content.len();
         let estimated_lines = file_length / 40; // Average ~40 chars per line
-        let chunk_size = 10000.min(estimated_lines / 10); // Process in chunks
-        
-        console_log!("Processing {} bytes, estimated {} lines in chunks of {}", 
+        let chunk_size = 10000.min(estimated_lines / 10).max(1); // Process in chunks; 0 would panic in the modulo below
+
+        console_log!("Processing {} bytes, estimated {} lines in chunks of {}",
                     file_length, estimated_lines, chunk_size);
-        
+
         // Pre-allocate result vectors with estimated capacity
         let mut gcode_lines = Vec::with_capacity(estimated_lines + estimated_lines / 5); // +20% buffer
         let mut position_tracker = HashMap::with_capacity(estimated_lines * 7 / 10); // ~70% moves
-        
+        let mut render_segments: Vec<PositionData> = Vec::with_capacity(estimated_lines * 7 / 10);
+
         // Stream through file line by line for optimal memory usage
         let mut file_position = 0u32;
         let mut line_number = 1u32;
         let mut lines_processed = 0usize;
         let mut last_progress_report = 0f64;
-        
-        // Process lines in chunks to avoid blocking
-        for line in file_content.lines() {
+
+        // split('\n') keeps a trailing '\r' in each line, so line.len() + 1 stays a correct byte
+        // count on CRLF files - .lines() strips the '\r' and would drift one byte per line
+        let mut line_iter = file_content.split('\n').peekable();
+        while let Some(line) = line_iter.next() {
+            if line_iter.peek().is_none() && line.is_empty() {
+                break; // trailing newline produces one empty final piece, not a real line
+            }
             // Update position tracking
             self.properties.file_position = file_position;
             self.properties.line_number = line_number;
-            
-            // Process slicer comments for feature detection (before G-code processing)
-            if line.trim().starts_with(";TYPE:") {
-                // Pass trimmed comment to slicer to ensure consistent matching
-                self.process_feature_comment(&slicer, line.trim());
+
+            // Process slicer comments for feature detection (before G-code processing).
+            // OrcaSlicer/BambuStudio use "; FEATURE:" instead of ";TYPE:"
+            let trimmed = line.trim();
+            if trimmed.starts_with(";TYPE:") || trimmed.starts_with("; FEATURE:") || trimmed.starts_with(";FEATURE:") {
+                self.process_feature_comment(&slicer, trimmed);
             }
-            
-            // Process the line2
+
             match process_line(&mut self.properties, line, file_position, line_number) {
                 Ok(gcode_line) => {
                     // Store position data for both extruding and travel moves
                     if let Some(move_data) = gcode_line.as_move() {
-                        if move_data.end.x.is_finite() && 
+                        if move_data.end.x.is_finite() &&
                            move_data.end.y.is_finite() && move_data.end.z.is_finite() &&
                            move_data.start.x.is_finite() && move_data.start.y.is_finite() && move_data.start.z.is_finite() {
-                            
+
                             let pos_data = PositionData::new_with_color(
                                 move_data.start.x, move_data.start.y, move_data.start.z,
                                 move_data.end.x, move_data.end.y, move_data.end.z,
@@ -100,28 +117,25 @@ impl FileProcessor {
                                 move_data.tool as u32,
                                 move_data.is_support,
                             );
-                            
+
+                            render_segments.push(pos_data.clone());
                             position_tracker.insert(file_position, pos_data);
                         }
                     } else if let Some(arc) = gcode_line.as_arc() {
                         // Tessellate arcs into line segments for rendering when extruding
                         if arc.extruding {
-                            // Compute center offsets relative to start
+                            // Center offsets back in G-code axes: Babylon y is the G-code Z axis
                             let i_off = arc.center.x - arc.start.x;
-                            let j_off = arc.center.y - arc.start.y;
-                            let k_off = arc.center.z - arc.start.z;
+                            let j_off = arc.center.z - arc.start.z;
+                            let k_off = arc.center.y - arc.start.y;
 
-                            // Use current properties for tessellation settings
-                            let arc_plane_pp = self.properties.arc_plane.clone();
                             let fix_radius = self.properties.fix_radius;
-                            let relative_move = !self.properties.absolute_positioning;
-                            let workplace = self.properties.current_workplace().clone();
 
                             // Arc segment length similar to TS (0.5mm)
                             let arc_seg_len = 0.5f64;
 
                             // Map processor_properties::ArcPlane -> utils::ArcPlane
-                            let utils_plane = match arc_plane_pp {
+                            let utils_plane = match self.properties.arc_plane.clone() {
                                 crate::processor_properties::ArcPlane::XY => crate::utils::ArcPlane::XY,
                                 crate::processor_properties::ArcPlane::XZ => crate::utils::ArcPlane::XZ,
                                 crate::processor_properties::ArcPlane::YZ => crate::utils::ArcPlane::YZ,
@@ -133,19 +147,16 @@ impl FileProcessor {
                                 i_off,
                                 j_off,
                                 Some(k_off),
-                                Some(arc.radius),
+                                arc.radius,
                                 arc.clockwise,
                                 utils_plane,
                                 arc_seg_len,
                                 fix_radius,
-                                relative_move,
-                                workplace,
                             ) {
-                                // Build segments between points
+                                // Segments only feed the render buffers; the tracker gets a single
+                                // entry for the whole arc so its keys stay real byte offsets
                                 let mut seg_start = arc.start.clone();
-                                let mut seg_index = 0u32;
                                 for p in arc_result.intermediate_points {
-                                    let pos_key = file_position + seg_index; // keep ordering within line
                                     let pd = PositionData::new_with_color(
                                         seg_start.x, seg_start.y, seg_start.z,
                                         p.x, p.y, p.z,
@@ -153,7 +164,6 @@ impl FileProcessor {
                                         true,
                                         0.2,
                                         self.properties.current_is_perimeter,
-                                        // color from slicer feature
                                         self.properties.current_feature_color.clone(),
                                         line_number,
                                         file_position,
@@ -161,14 +171,29 @@ impl FileProcessor {
                                         self.properties.current_tool.tool_number as u32,
                                         self.properties.current_is_support,
                                     );
-                                    position_tracker.insert(pos_key, pd);
-                                    seg_start = p;
-                                    seg_index += 1;
+                                    seg_start = p.clone();
+                                    render_segments.push(pd);
                                 }
                             }
+
+                            let arc_end = PositionData::new_with_color(
+                                arc.start.x, arc.start.y, arc.start.z,
+                                arc.end.x, arc.end.y, arc.end.z,
+                                arc.feed_rate,
+                                true,
+                                0.2,
+                                self.properties.current_is_perimeter,
+                                self.properties.current_feature_color.clone(),
+                                line_number,
+                                file_position,
+                                (file_position + line.len() as u32),
+                                self.properties.current_tool.tool_number as u32,
+                                self.properties.current_is_support,
+                            );
+                            position_tracker.insert(file_position, arc_end);
                         }
                     }
-                    
+
                     gcode_lines.push(gcode_line);
                 }
                 Err(error) => {
@@ -177,16 +202,16 @@ impl FileProcessor {
                     gcode_lines.push(GCodeLine::new_comment(file_position, line_number, line.to_string()));
                 }
             }
-            
+
             // Update position for next line (account for stripped newline)
             file_position += line.len() as u32 + 1;
             line_number += 1;
             lines_processed += 1;
-            
+
             // Report progress every chunk or 2%
             if lines_processed % chunk_size == 0 || lines_processed % (estimated_lines / 50).max(1000) == 0 {
                 let progress = lines_processed as f64 / estimated_lines as f64;
-                
+
                 // Only report if progress changed significantly (reduces callback overhead)
                 if progress - last_progress_report >= 0.02 {
                     if let Some(ref callback) = progress_callback {
@@ -196,21 +221,21 @@ impl FileProcessor {
                 }
             }
         }
-        
+
         // Final progress report
         if let Some(ref callback) = progress_callback {
             callback.call(1.0, "Processing complete");
         }
-        
+
         // Update final statistics
         self.properties.line_count = line_number - 1;
-        
-        console_log!("Processing complete: {} lines, {} moves, {} comments", 
-                    gcode_lines.len(), 
+
+        console_log!("Processing complete: {} lines, {} moves, {} render segments",
+                    gcode_lines.len(),
                     position_tracker.len(),
-                    gcode_lines.iter().filter(|l| matches!(l, GCodeLine::Comment(_))).count());
-        
-        Ok((gcode_lines, position_tracker))
+                    render_segments.len());
+
+        Ok((gcode_lines, position_tracker, render_segments))
     }
     
     /// Get processing statistics
@@ -226,86 +251,6 @@ impl FileProcessor {
             first_gcode_byte: self.properties.first_gcode_byte,
             last_gcode_byte: self.properties.last_gcode_byte,
         }
-    }
-    
-    /// Process file in streaming chunks (alternative approach for very large files)
-    pub fn process_file_streaming(
-        &mut self,
-        file_content: &str,
-        chunk_size: usize,
-        progress_callback: Option<ProgressCallback>,
-    ) -> Result<(Vec<GCodeLine>, HashMap<u32, PositionData>), String> {
-        
-        self.properties.reset();
-        let slicer = detect_slicer(file_content);
-        self.properties.slicer_name = slicer.get_name().to_string();
-        
-        let total_length = file_content.len();
-        let mut gcode_lines = Vec::new();
-        let mut position_tracker = HashMap::new();
-        
-        let mut file_position = 0u32;
-        let mut line_number = 1u32;
-        let mut processed_bytes = 0usize;
-        
-        // Process in streaming chunks
-        for line_chunk in file_content.lines().collect::<Vec<_>>().chunks(chunk_size) {
-            
-            for line in line_chunk {
-                self.properties.file_position = file_position;
-                self.properties.line_number = line_number;
-                if line.trim().starts_with(";TYPE:") {
-                    self.process_feature_comment(&slicer, line.trim());
-                }
-                
-                match process_line(&mut self.properties, line, file_position, line_number) {
-                    Ok(gcode_line) => {
-                        // Store position data for moves (both extruding and travel)
-                        if let Some(move_data) = gcode_line.as_move() {
-                            if move_data.end.x.is_finite() && 
-                               move_data.end.y.is_finite() && move_data.end.z.is_finite() &&
-                               move_data.start.x.is_finite() && move_data.start.y.is_finite() && move_data.start.z.is_finite() {
-                                
-                                let pos_data = PositionData::new_with_color(
-                                    move_data.start.x, move_data.start.y, move_data.start.z,
-                                    move_data.end.x, move_data.end.y, move_data.end.z,
-                                    move_data.feed_rate,
-                                    move_data.extruding,
-                                    move_data.layer_height,
-                                    move_data.is_perimeter,
-                                    move_data.color.clone(),
-                                    line_number,
-                                    file_position,
-                                    (file_position + line.len() as u32),
-                                    move_data.tool as u32,
-                                    move_data.is_support,
-                                );
-                                
-                                position_tracker.insert(file_position, pos_data);
-                            }
-                        }
-                        
-                        gcode_lines.push(gcode_line);
-                    }
-                    Err(_) => {
-                        // Create comment for unparseable lines
-                        gcode_lines.push(GCodeLine::new_comment(file_position, line_number, line.to_string()));
-                    }
-                }
-                
-                file_position += line.len() as u32 + 1;
-                line_number += 1;
-                processed_bytes += line.len() + 1; // +1 for newline
-            }
-            
-            // Report progress after each chunk
-            let progress = processed_bytes as f64 / total_length as f64;
-            if let Some(ref callback) = progress_callback {
-                callback.call(progress.min(1.0), "Processing G-code");
-            }
-        }
-        
-        Ok((gcode_lines, position_tracker))
     }
     
     /// Validate file content before processing
@@ -325,9 +270,11 @@ impl FileProcessor {
         
         for line in &lines {
             let trimmed = line.trim();
+            let bytes = trimmed.as_bytes();
             if trimmed.starts_with(';') || trimmed.is_empty() {
                 comment_lines += 1;
-            } else if trimmed.starts_with('G') || trimmed.starts_with('M') || trimmed.starts_with('T') {
+            } else if bytes.len() >= 2 && (bytes[0] == b'G' || bytes[0] == b'M' || bytes[0] == b'T') && bytes[1].is_ascii_digit() {
+                // Require a digit after the letter so plain English text ("This...") does not count
                 gcode_lines += 1;
             }
         }
@@ -404,8 +351,9 @@ mod tests {
         let result = processor.process_file_content(simple_gcode, None);
         assert!(result.is_ok());
         
-        let (gcode_lines, position_tracker) = result.unwrap();
+        let (gcode_lines, position_tracker, render_segments) = result.unwrap();
         assert!(gcode_lines.len() >= 4); // At least the lines we specified
         assert!(!position_tracker.is_empty()); // Should have at least one extruding move
+        assert!(!render_segments.is_empty());
     }
 }

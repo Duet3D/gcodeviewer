@@ -247,13 +247,18 @@ impl ProcessorProperties {
         }
     }
     
-    // Update feed rate tracking
-    pub fn update_feed_rate(&mut self, feed_rate: f64) {
+    // F is modal: it always updates the current feed rate, extruding or not
+    pub fn set_feed_rate(&mut self, feed_rate: f64) {
         self.current_feed_rate = feed_rate;
+    }
+
+    // Min/max only cover feed rates used while extruding - travel rates would compress the
+    // feed-rate color gradient into a fraction of its range
+    pub fn record_extrusion_feed_rate(&mut self, feed_rate: f64) {
         if feed_rate > self.max_feed_rate {
             self.max_feed_rate = feed_rate;
         }
-        if feed_rate < self.min_feed_rate {
+        if feed_rate > 0.0 && feed_rate < self.min_feed_rate {
             self.min_feed_rate = feed_rate;
         }
     }
@@ -295,7 +300,8 @@ impl ProcessorProperties {
         colors
     }
     
-    // Reset for new file processing
+    // Reset for new file processing. The processor instance persists across loads, so every piece
+    // of modal parser state a file can change must be restored here or it bleeds into the next file
     pub fn reset(&mut self) {
         self.line_count = 0;
         self.file_position = 0;
@@ -312,19 +318,35 @@ impl ProcessorProperties {
         self.min_height = 0.0;
         self.max_feed_rate = 1.0;
         self.min_feed_rate = 999999999.0;
+        self.current_feed_rate = 1500.0;
         self.current_z = 0.0;
         self.target_hotend_temp = 0.0;
         self.target_bed_temp = 0.0;
         self.current_hotend_temp = 0.0;
         self.current_bed_temp = 0.0;
-        
-        // Reset tool to default
+        self.absolute_positioning = true;
+        self.absolute_extrusion = true;
+        self.firmware_retraction = false;
+        self.units = Units::Millimeters;
+        self.arc_plane = ArcPlane::XY;
+        self.steppers_enabled = true;
+        self.slicer_name = "Unknown".to_string();
+        self.slicer_version = "Unknown".to_string();
+        self.current_feature_color = Color4::white();
+        self.current_is_perimeter = false;
+        self.current_is_support = false;
+
+        // Drop tools auto-created by previous files and reset to the default tool
+        self.tools.truncate(1);
         if !self.tools.is_empty() {
             self.current_tool = self.tools[0].clone();
         }
-        
+
         // Reset workspace to default
         self.current_workplace_idx = 0;
+        for wp in &mut self.workplace_offsets {
+            wp.offset = Vector3::zero();
+        }
     }
     
     // Get units multiplier for conversion

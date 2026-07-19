@@ -19,18 +19,20 @@ export function delay(ms) {
    return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-function getNumber(tokenNumber, value, relativeMove, offset) {
+function getNumber(tokenNumber, value, relativeMove, offset, unitMultiplier) {
    let number = Number(tokenNumber.substring(1))
    number = !number ? 0 : number
+   number *= unitMultiplier
    return relativeMove ? number + value : number + offset
 }
 
-export function doArc(tokens, currentPosition, relativeMove, arcSegLength, fixRadius, arcPlane, offset) {
+export function doArc(tokens, currentPosition, relativeMove, arcSegLength, fixRadius, arcPlane, offset, unitMultiplier = 1) {
    const current = new Vector3(currentPosition.x, currentPosition.z, currentPosition.y)
    const move = current.clone()
 
    let i = 0,
       j = 0,
+      k = 0,
       r = 0
    const cw = tokens.some((t) => t.includes('G2'))
    //read params
@@ -39,61 +41,57 @@ export function doArc(tokens, currentPosition, relativeMove, arcSegLength, fixRa
       switch (token[0]) {
          case 'X':
             {
-               move.x = getNumber(token, move.x, relativeMove, offset.x)
+               move.x = getNumber(token, move.x, relativeMove, offset.x, unitMultiplier)
             }
             break
          case 'Y':
             {
-               move.y = getNumber(token, move.y, relativeMove, offset.y)
+               move.y = getNumber(token, move.y, relativeMove, offset.y, unitMultiplier)
             }
             break
          case 'Z':
             {
-               move.z = getNumber(token, move.z, relativeMove, offset.z)
+               move.z = getNumber(token, move.z, relativeMove, offset.z, unitMultiplier)
             }
             break
          case 'I':
             {
-               i = getNumber(token, i, false, 0)
+               i = getNumber(token, i, false, 0, unitMultiplier)
             }
             break // x offset from current position
          case 'J':
             {
-               j = getNumber(token, j, false, 0)
+               j = getNumber(token, j, false, 0, unitMultiplier)
             }
             break //y offset from current position
          case 'K':
             {
-               j = getNumber(token, j, false, 0)
+               k = getNumber(token, k, false, 0, unitMultiplier)
             }
             break
          case 'R':
             {
-               r = getNumber(token, r, false, 0)
+               r = getNumber(token, r, false, 0, unitMultiplier)
             }
             break
       }
    }
 
+   // Map the raw I/J/K offsets onto the active plane's (axis0, axis1) center offsets:
+   // G17 (XY) uses I/J, G18 (XZ) uses I/K, G19 (YZ) uses J/K
    let axis0 = 'x'
    let axis1 = 'y'
    let axis2 = 'z'
+   let o0 = i
+   let o1 = j
    switch (arcPlane) {
-      case 'XY':
-         {
-            axis0 = 'x'
-            axis1 = 'y'
-            axis2 = 'z'
-         }
-         break
       case 'XZ':
          {
             axis0 = 'z' //Have to invert for correct arc direction per RRF
             axis1 = 'x'
             axis2 = 'y'
-            const temp = j //swap i and j
-            j = i
-            i = temp
+            o0 = k
+            o1 = i
          }
          break
       case 'YZ':
@@ -101,9 +99,13 @@ export function doArc(tokens, currentPosition, relativeMove, arcSegLength, fixRa
             axis0 = 'y'
             axis1 = 'z'
             axis2 = 'x'
+            o0 = j
+            o1 = k
          }
          break
    }
+   i = o0
+   j = o1
 
    //If we have an R param we need to find th radial point (we'll use 1mm segments for now)
    //Given R it is possible to have 2 values .  Positive we use the shorter of the two.
@@ -113,7 +115,7 @@ export function doArc(tokens, currentPosition, relativeMove, arcSegLength, fixRa
 
       const dSquared = Math.pow(delta0, 2) + Math.pow(delta1, 2)
       if (dSquared === 0) {
-         return { position: current.clone(), points: [] } //we'll abort the render and move te position to the new position.
+         return { position: { x: move.x, y: move.z, z: move.y }, points: [] } //we'll abort the render and move the position to the new position.
       }
 
       let hSquared = Math.pow(r, 2) - dSquared / 4
@@ -142,9 +144,9 @@ export function doArc(tokens, currentPosition, relativeMove, arcSegLength, fixRa
       j = delta1 / 2 - delta0 * hDivD
    } else {
       //the radial point is an offset from the current position
-      ///Need at least on point
+      ///Need at least one point
       if (i === 0 && j === 0) {
-         return { position: current.clone(), points: [] } //we'll abort the render and move te position to the new position.
+         return { position: { x: move.x, y: move.z, z: move.y }, points: [] } //we'll abort the render and move the position to the new position.
       }
    }
 

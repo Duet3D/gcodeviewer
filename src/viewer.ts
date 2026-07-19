@@ -53,6 +53,9 @@ export default class Viewer {
    lastFrameUpdate: number = 0
    renderTimeout: number = 1000
    maxFrameRate = 1000 / 30
+   // Mirrored from the main thread via visibilitychange - the worker's faked document has no
+   // usable `hidden` property, so without this the render loop burns GPU in background tabs
+   documentHidden = false
 
    // getBoundingInfo()
    rect = {
@@ -94,12 +97,6 @@ export default class Viewer {
       }
 
       this.worker = worker
-   }
-
-   init_direct(canvas: HTMLCanvasElement, fakeWorker) {
-      this.offscreen = false
-      this.offscreenCanvas = canvas
-      this.worker = fakeWorker
    }
 
    setSizes(width, height) {
@@ -161,6 +158,8 @@ export default class Viewer {
       this.orbitCamera = new ArcRotateCamera('Camera', Math.PI / 2, 2.356194, 15, new Vector3(0, 0, 0), this.scene)
       this.orbitCamera.invertRotation = false
       this.orbitCamera.attachControl(this.offscreenCanvas, true)
+      // Camera movement changes what sits under the (possibly resting) pointer
+      this.orbitCamera.onViewMatrixChangedObservable.add(() => this.processor.gpuPicker.requestPick())
       this.orbitCamera.maxZ = 100000
       this.orbitCamera.lowerRadiusLimit = 5
       this.orbitCamera.setPosition(new Vector3(150, 100, 0))
@@ -222,7 +221,7 @@ export default class Viewer {
       //limit frames
       let deltaTime = 0
       this.engine.runRenderLoop(() => {
-         if (document.hidden) return
+         if (this.documentHidden) return
 
          deltaTime += this.engine.getDeltaTime()
          if (deltaTime > this.maxFrameRate) {
@@ -422,6 +421,7 @@ export default class Viewer {
          this.scene.clipPlane = new Plane(0, 1, 0, this.zTopClipValue)
          this.scene.clipPlane2 = new Plane(0, -1, 0, this.zBottomClipValue)
       }
+      this.processor.gpuPicker.requestPick()
       this.scene.render(true)
    }
 
@@ -549,9 +549,14 @@ export default class Viewer {
    noop() {}
 
    unload() {
-      this.engine.dispose()
-      this.scene = null
-      this.engine = null
-      this.worker.postMessage({ type: 'unloadComplete', params: [] })
+      // The proxy terminates this worker only after unloadComplete arrives, so it must be posted
+      // even if dispose throws - a worker leaked here keeps its render loop running forever
+      try {
+         this.engine.dispose()
+      } finally {
+         this.scene = null
+         this.engine = null
+         this.worker.postMessage({ type: 'unloadComplete', params: [] })
+      }
    }
 }

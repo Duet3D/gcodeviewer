@@ -26,10 +26,11 @@ pub fn parse_workplace_coordinates(
         _ => return Err(format!("Unknown workplace command: {}", command)),
     };
     
-    // Update current workplace if valid index
-    if workspace_idx < properties.workplace_offsets.len() {
-        properties.current_workplace_idx = workspace_idx as u8;
+    // Absolute moves read current_workplace(), so the offsets table must cover the new index
+    while properties.workplace_offsets.len() <= workspace_idx {
+        properties.workplace_offsets.push(crate::processor_properties::WorkplaceOffset::new(properties.workplace_offsets.len() as u8));
     }
+    properties.current_workplace_idx = workspace_idx as u8;
     
     // Create command data
     let cmd_data = CommandData::new(

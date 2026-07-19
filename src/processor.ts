@@ -25,15 +25,15 @@ export default class Processor {
    breakPoint = 100000
    gpuPicker: GPUPicker
    worker: Worker
-   //modelMaterial: ModelMaterial[]
    // Starts empty so material setters (render mode, alpha, tools) called before the first file is
    // loaded are harmless no-ops rather than dereferencing undefined
    modelMaterial: LineShaderMaterial[] = []
    filePosition: number = 0
-   maxIndex: number = 0
    focusedColorId = 0
    lastMeshMode = 0
    perimeterOnly = false
+   // The single retained copy of the file text; gCodeLines store only byte offsets and re-slice
+   // from here via lineText()
    originalFile: string | undefined
    // Set by cancelLoad() to abort an in-progress parse at the next chunk boundary
    private cancelRequested = false
@@ -107,6 +107,10 @@ export default class Processor {
 
    getNozzle(): Nozzle | null {
       return this.nozzle
+   }
+
+   lineText(l: Base): string {
+      return this.originalFile?.substring(l.filePosition, l.filePosition + l.lineLength) ?? ''
    }
 
    // Replaces the tool table, e.g. from the printer's object model. Colors are hex strings like '#ff0000'
@@ -256,13 +260,17 @@ export default class Processor {
       //This is driving picking
       this.gpuPicker.colorTestCallBack = (colorId) => {
          const id = colorToNum(colorId) - 1
+         // The picker reads back every frame, even while the pointer rests on the same segment
+         if (id === this.focusedColorId) {
+            return
+         }
          this.focusedColorId = id
          if (this.gCodeLines[id] && id > 0) {
             const o = this.gCodeLines[id]
 
             this.worker.postMessage({
                type: 'currentline',
-               line: o.line,
+               line: this.lineText(o),
                lineNumber: o.lineNumber,
                filePosition: o.filePosition,
             })
@@ -270,6 +278,12 @@ export default class Processor {
          }
       }
 
+      // A file without extruding F commands leaves the min/max sentinels untouched; fall back to a
+      // sane range so the feed-rate gradient does not divide by a negative span
+      if (this.processorProperties.minFeedRate > this.processorProperties.maxFeedRate) {
+         this.processorProperties.minFeedRate = 0
+         this.processorProperties.maxFeedRate = 1
+      }
       this.modelMaterial.forEach((m) => m.setMaxFeedRate(this.processorProperties.maxFeedRate))
       this.modelMaterial.forEach((m) => m.setMinFeedRate(this.processorProperties.minFeedRate))
       // Re-assert the perimeter-only filter on the freshly built materials (meshes always carry the
@@ -468,19 +482,24 @@ export default class Processor {
          this.lastProcessingMethod = 'hybrid'
          this.processingStats.method = 'hybrid'
 
-         // Get position data from WASM
-         const sortedPositions = this.wasmProcessor!.getSortedPositions()
+         // One packed buffer instead of one boundary call (and one boxed wasm object) per move
+         const positionBuffer = this.wasmProcessor!.getPositionBuffer()
+         const positionCount = positionBuffer.length / 6
          this.positionTracker.clear()
-         this.sortedPositions = Array.from(sortedPositions)
-         this.processingStats.positionsExtracted = sortedPositions.length
-
-         // Build position tracker from WASM data
-         for (const pos of sortedPositions) {
-            const posData = this.wasmProcessor!.getPositionData(pos)
-            if (posData) {
-               this.positionTracker.set(pos, posData)
-            }
+         this.sortedPositions = new Array(positionCount)
+         for (let i = 0; i < positionCount; i++) {
+            const o = i * 6
+            const pos = positionBuffer[o]
+            this.sortedPositions[i] = pos
+            this.positionTracker.set(pos, {
+               x: positionBuffer[o + 1],
+               y: positionBuffer[o + 2],
+               z: positionBuffer[o + 3],
+               feedRate: positionBuffer[o + 4],
+               extruding: positionBuffer[o + 5] !== 0,
+            })
          }
+         this.processingStats.positionsExtracted = positionCount
 
          // Generate render buffers using WASM for maximum speed
          console.log('🚀 Generating render buffers with WASM...')
@@ -526,6 +545,10 @@ export default class Processor {
             await this.loadFileStreamedWithPositions(file)
             this.processingStats.typescriptTime = performance.now() - tsStartTime
          }
+
+         // Everything is copied to the JS side now; free the wasm-side tracker and segments so the
+         // next load reuses linear memory instead of growing it
+         this.wasmProcessor!.clearData()
 
          // Report final performance comparison
          const totalWasmTime = (this.processingStats.wasmTime || 0) + (this.processingStats.typescriptTime || 0)
@@ -612,69 +635,6 @@ export default class Processor {
       return m
    }
 
-   async testRenderScene() {
-      const renderlines = []
-
-      let segmentCount = 0
-      let lastRenderedIdx = 0
-      let alphaIndex = 0
-
-      for (let idx = 0; idx < this.gCodeLines.length - 1; idx++) {
-         const gCodeline = this.gCodeLines[idx] as Move
-         try {
-            if (gCodeline.lineType === 'L' && gCodeline.extruding) {
-               //Regular move
-               renderlines.push(gCodeline)
-               segmentCount++
-            } else if (gCodeline.lineType === 'A' && gCodeline.extruding) {
-               //Arc Move
-               renderlines.push(gCodeline)
-               segmentCount += (this.gCodeLines[idx] as ArcMove).segments.length
-            } else if (gCodeline.lineType === 'T') {
-               //Travel
-               renderlines.push(gCodeline)
-               segmentCount++
-            }
-         } catch (ex) {
-            console.log(this.gCodeLines[idx], ex)
-         }
-
-         if (segmentCount >= this.breakPoint) {
-            alphaIndex++
-            const sl = renderlines.slice(lastRenderedIdx)
-            const rl = this.testBuildMesh(sl, segmentCount, alphaIndex)
-            this.meshes.push(...rl)
-            this.gpuPicker.addToRenderList(rl[0]) //use the box mesh for all picking
-            lastRenderedIdx = renderlines.length
-            segmentCount = 0
-
-            this.worker.postMessage({
-               type: 'progress',
-               progress: idx / this.gCodeLines.length,
-               label: 'Generating model.',
-            })
-         }
-      }
-
-      if (segmentCount > 0) {
-         const sl = renderlines.slice(lastRenderedIdx)
-         const rl = this.testBuildMesh(sl, segmentCount, alphaIndex)
-         this.meshes.push(...rl)
-         this.gpuPicker.addToRenderList(rl[0]) //use the box mesh for all picking
-      }
-
-      this.worker.postMessage({
-         type: 'progress',
-         progress: 1,
-         label: 'Generating model.',
-      })
-
-      this.modelMaterial.forEach((m) => {
-         m.updateCurrentFilePosition(this.filePosition)
-         m.updateToolColors(this.processorProperties.buildToolFloat32Array())
-      })
-   }
-
    async testRenderSceneProgressive() {
       const renderlines = []
       let segmentCount = 0
@@ -684,7 +644,16 @@ export default class Processor {
       for (let idx = 0; idx < this.gCodeLines.length - 1; idx++) {
          const gCodeline = this.gCodeLines[idx] as Move
          try {
-            if (gCodeline.lineType === 'L' && gCodeline.extruding) {
+            // Zero-length moves (E-only retracts/recoveries) have no direction vector - renderLine
+            // would emit NaN matrices that poison the thin-instance bounding boxes
+            const zeroLength =
+               (gCodeline.lineType === 'L' || gCodeline.lineType === 'T') &&
+               gCodeline.start[0] === gCodeline.end[0] &&
+               gCodeline.start[1] === gCodeline.end[1] &&
+               gCodeline.start[2] === gCodeline.end[2]
+            if (zeroLength) {
+               // skip
+            } else if (gCodeline.lineType === 'L' && gCodeline.extruding) {
                //Regular move
                renderlines.push(gCodeline)
                segmentCount++
@@ -755,9 +724,6 @@ export default class Processor {
          this.meshes[idx].setEnabled(true)
       }
       this.lastMeshMode = mode
-
-      // Refresh material states to ensure correct lighting
-      this.modelMaterial.forEach((m) => m.refreshMaterialState())
    }
 
    testBuildMesh(renderlines, segCount, alphaIndex): Mesh[] {
@@ -812,7 +778,7 @@ export default class Processor {
             const l = line as Move
             const lineData = l.renderLine(0.4, 0.2)
             buildBuffers(lineData, l, segIdx)
-            this.gCodeLines[line.lineNumber - 1] = new Move_Thin(this.processorProperties, line as Move, box, idx) //remove unnecessary information now that we have the matrix
+            this.gCodeLines[line.lineNumber - 1] = new Move_Thin(this.processorProperties, line as Move) //remove unnecessary information now that we have the matrix
             segIdx++
          } else if (line.lineType === 'A') {
             const arc = line as ArcMove
@@ -823,7 +789,7 @@ export default class Processor {
                buildBuffers(lineData, arc, segIdx)
                segIdx++
             }
-            this.gCodeLines[line.lineNumber - 1] = new Move_Thin(this.processorProperties, line as ArcMove, box, idx) //remove unnecessary information now that we have the matrix
+            this.gCodeLines[line.lineNumber - 1] = new Move_Thin(this.processorProperties, line as ArcMove) //remove unnecessary information now that we have the matrix
          }
       }
 
@@ -857,16 +823,10 @@ export default class Processor {
          colorData.set(lineData.Color, idx * 4)
          pickData.set([line.colorId[0] / 255, line.colorId[1] / 255, line.colorId[2] / 255], idx * 3)
          filePositionData.set([line.filePosition], idx) //Record the file position with the mesh
-         fileEndPositionData.set([line.filePosition + line.line.length], idx) //Record the file position with the mesh
+         fileEndPositionData.set([line.filePosition + line.lineLength], idx) //Record the file position with the mesh
          toolData.set([line.tool], idx)
          feedRate.set([line.feedRate], idx)
          isPerimeter.set([line.isPerimeter ? 1 : 0], idx)
-      }
-   }
-
-   getFileSize() {
-      if (this.gCodeLines) {
-         return this.gCodeLines[this.gCodeLines.length - 1].filePosition
       }
    }
 
@@ -885,10 +845,9 @@ export default class Processor {
 
       const sub = this.gCodeLines.slice(min, max)
       const lines = []
-      for (const idx in sub) {
-         const l = sub[idx]
+      for (const l of sub) {
          lines.push({
-            line: l.line,
+            line: this.lineText(l),
             lineNumber: l.lineNumber,
             filePosition: l.filePosition,
             lineType: l.lineType,
@@ -997,6 +956,15 @@ export default class Processor {
 
       this.meshes.push(...meshes)
       this.gpuPicker.addToRenderList(meshes[0]) // Use the first mesh for picking
+
+      // The geometry lives in the mesh buffers now; slim the fully parsed moves down the same way
+      // the TS path does, so the hybrid path does not retain start/end/color arrays per line
+      for (let idx = 0; idx < this.gCodeLines.length; idx++) {
+         const l = this.gCodeLines[idx]
+         if (l.lineType === 'L' || l.lineType === 'T' || l.lineType === 'A') {
+            this.gCodeLines[idx] = new Move_Thin(this.processorProperties, l as Move)
+         }
+      }
 
       // Update materials
       this.modelMaterial.forEach((m) => {

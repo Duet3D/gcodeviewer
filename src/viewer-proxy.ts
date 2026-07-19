@@ -71,6 +71,7 @@ export default class ViewerProxy {
    // Every DOM listener we install on the worker's behalf, so unload() can detach them all. Without
    // this they leak on every mount/unmount and keep posting into a terminated worker
    private registeredListeners: Array<{ target: EventTarget; eventName: string; handler: EventListener; opt: any }> = []
+   private unloadFallback: ReturnType<typeof setTimeout> | null = null
 
    constructor(canvas: HTMLCanvasElement) {
       this.mainCanvas = canvas
@@ -101,6 +102,12 @@ export default class ViewerProxy {
             width: this.mainCanvas?.clientWidth,
             height: this.mainCanvas?.clientHeight,
          })
+      })
+
+      // The worker's faked document cannot observe tab visibility, so mirror it over to pause the
+      // render loop while the tab is hidden
+      this.addTrackedListener(document, 'visibilitychange', () => {
+         this.webWorker.postMessage({ type: 'visibility', hidden: document.hidden })
       })
    }
 
@@ -178,6 +185,10 @@ export default class ViewerProxy {
             }
             break
          case 'unloadComplete':
+            if (this.unloadFallback) {
+               clearTimeout(this.unloadFallback)
+               this.unloadFallback = null
+            }
             this.removeAllListeners()
             this.webWorker.terminate()
             break
@@ -210,15 +221,15 @@ export default class ViewerProxy {
    }
 
    unload(): void {
+      this.removeAllListeners()
       this.webWorker.postMessage({ type: 'unload', params: [] })
+      // If the worker never confirms the unload (e.g. an exception during engine teardown), kill it
+      // anyway - a leaked worker keeps rendering its detached OffscreenCanvas indefinitely
+      this.unloadFallback = setTimeout(() => this.webWorker.terminate(), 2000)
    }
 
    reset(): void {
       this.webWorker.postMessage({ type: 'reset', params: [] })
-   }
-
-   updateColorTest(): void {
-      this.webWorker.postMessage({ type: 'updatecolortest', params: [] })
    }
 
    updateFilePosition(filePosition: number, animate: boolean = false): void {

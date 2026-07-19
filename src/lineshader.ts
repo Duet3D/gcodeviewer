@@ -1,7 +1,7 @@
 import { ShaderMaterial } from '@babylonjs/core/Materials/shaderMaterial'
 import { Scene } from '@babylonjs/core/scene'
 import { UniformBuffer } from '@babylonjs/core/Materials/uniformBuffer'
-import { Vector4 } from '@babylonjs/core/Maths/math.vector'
+import { Vector3, Vector4 } from '@babylonjs/core/Maths/math.vector'
 import '@babylonjs/core/Materials/standardMaterial'
 
 export default class LineShaderMaterial {
@@ -9,7 +9,6 @@ export default class LineShaderMaterial {
    material: ShaderMaterial
    toolBuffer: UniformBuffer
    renderMode = 0
-   isLineMesh = false // Track current lineMesh state
 
    static readonly vertexShader = `
    #define THIN_INSTANCES
@@ -270,38 +269,33 @@ export default class LineShaderMaterial {
       this.material.forceDepthWrite = true
 
       //Set defaults
-      this.material.onBindObservable.addOnce(() => {
-         this.material
-            .getEffect()
-            ?.setFloat('animationLength', 5000)
-            .setVector4('progressColor', new Vector4(0, 1, 0, 1))
-            .setFloat('alphaValue', 0.05)
-            .setBool('showTravels', false)
-            .setBool('perimeterOnly', false)
-            .setBool('lineMesh', false) // Default to false (lighting enabled)
-      })
+      this.material.setFloat('animationLength', 5000)
+      this.material.setVector4('progressColor', new Vector4(0, 1, 0, 1))
+      this.material.setFloat('alphaValue', 0.05)
+      this.material.setInt('showTravels', 0)
+      this.material.setInt('perimeterOnly', 0)
+      this.material.setInt('lineMesh', 0)
 
       //Per loop
       let time = 0
       this.material.onBindObservable.add(() => {
          time += this.scene.getEngine().getDeltaTime()
          this.material.getEffect()?.setFloat('utime', time)
-
-         //this.material.getEffect()?.setFloat4('progresscolor', 0, 1, 0, 1.0)
       })
    }
+
+   // All uniforms go through ShaderMaterial's persistent store (setFloat/setInt/...), which re-uploads
+   // them on every bind. Never queue them via onBindObservable.addOnce: materials on disabled mesh
+   // variants (2 of every 3 in each [box, cyl, line] triple) never bind, so such observers accumulate
+   // without bound and eventually OOM the worker
 
    updateRenderMode(mode: number) {
       this.renderMode = mode
-      this.material.onBindObservable.addOnce(() => {
-         this.material.getEffect()?.setInt('renderMode', mode)
-      })
+      this.material.setInt('renderMode', mode)
    }
 
    updateCurrentFilePosition(position: number) {
-      this.material.onBindObservable.addOnce(() => {
-         this.material.getEffect()?.setFloat('currentPosition', position)
-      })
+      this.material.setFloat('currentPosition', position)
    }
 
    getMaterial() {
@@ -312,93 +306,52 @@ export default class LineShaderMaterial {
    }
 
    updateToolColors(toolColors: number[]) {
-      this.material.onBindObservable.addOnce(() => {
-         this.material.getEffect()?.setFloatArray4('toolColors', toolColors)
-      })
+      this.material.setArray4('toolColors', toolColors)
    }
 
    setPickColor(color: number[]) {
-      this.material.onBindObservable.addOnce(() => {
-         this.material.getEffect()?.setFloat3('focusedPickColor', color[0] / 255, color[1] / 255, color[2] / 255)
-      })
+      this.material.setVector3('focusedPickColor', new Vector3(color[0] / 255, color[1] / 255, color[2] / 255))
    }
 
    setMaxFeedRate(feedRate: number) {
-      this.material.onBindObservable.addOnce(() => {
-         this.material.getEffect()?.setFloat('maxFeedRate', feedRate)
-      })
+      this.material.setFloat('maxFeedRate', feedRate)
    }
 
    setMinFeedRate(feedRate: number) {
-      this.material.onBindObservable.addOnce(() => {
-         this.material.getEffect()?.setFloat('minFeedRate', feedRate)
-      })
+      this.material.setFloat('minFeedRate', feedRate)
    }
 
    setAlphaMode(mode: boolean) {
-      this.material.onBindObservable.addOnce(() => {
-         this.material.getEffect()?.setBool('alphaMode', mode)
-      })
+      this.material.setInt('alphaMode', mode ? 1 : 0)
    }
 
    // Opacity (0-1) of not-yet-printed geometry while alpha mode is on
    setAlphaValue(value: number) {
-      this.material.onBindObservable.addOnce(() => {
-         this.material.getEffect()?.setFloat('alphaValue', value)
-      })
+      this.material.setFloat('alphaValue', value)
    }
 
    setProgressMode(mode: boolean) {
-      this.material.onBindObservable.addOnce(() => {
-         this.material.getEffect()?.setBool('progressMode', mode)
-      })
+      this.material.setInt('progressMode', mode ? 1 : 0)
    }
 
    setShowTravels(show: boolean) {
-      this.material.onBindObservable.addOnce(() => {
-         this.material.getEffect()?.setBool('showTravels', show)
-      })
+      this.material.setInt('showTravels', show ? 1 : 0)
    }
 
    setPerimeterOnly(mode: boolean) {
-      this.material.onBindObservable.addOnce(() => {
-         this.material.getEffect()?.setBool('perimeterOnly', mode)
-      })
+      this.material.setInt('perimeterOnly', mode ? 1 : 0)
    }
 
    setProgressColor(color: number[]) {
-      this.material.onBindObservable.addOnce(() => {
-         this.material
-            .getEffect()
-            ?.setFloat4('progressColor', color[0] / 255, color[1] / 255, color[2] / 255, color[3] / 255)
-      })
+      this.material.setVector4('progressColor', new Vector4(color[0] / 255, color[1] / 255, color[2] / 255, color[3] / 255))
    }
 
    setLineMesh(mode: boolean) {
-      this.isLineMesh = mode
-      
-      // Immediate update if effect is ready
-      if (this.material.getEffect()?.isReady()) {
-         this.material.getEffect()?.setBool('lineMesh', mode)
-      }
-      
-      // Also schedule update for next bind in case effect wasn't ready
-      this.material.onBindObservable.addOnce(() => {
-         this.material.getEffect()?.setBool('lineMesh', mode)
-      })
+      this.material.setInt('lineMesh', mode ? 1 : 0)
    }
 
    showSupports(show: boolean) {
-      // this.material.onBindObservable.addOnce(() => {
-      //    this.material.getEffect()?.setBool('showSupports', show)
-      // })
-   }
-
-   refreshMaterialState() {
-      // Force refresh of the lineMesh uniform to ensure correct state
-      if (this.material.getEffect()?.isReady()) {
-         this.material.getEffect()?.setBool('lineMesh', this.isLineMesh)
-      }
+      // this.material.setInt('showSupports', show ? 1 : 0)
    }
 
    dispose() {

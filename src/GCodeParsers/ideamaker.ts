@@ -1,4 +1,3 @@
-import ProcessorProperties from '../processorproperties'
 import SlicerBase from './slicerbase'
 
 export default class PrusaSlicer extends SlicerBase {
@@ -58,5 +57,4 @@ export default class PrusaSlicer extends SlicerBase {
       return this.currentIsSupport
    }
 
-   processHeader(file: string[], props: ProcessorProperties) {}
 }

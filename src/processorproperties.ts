@@ -43,7 +43,8 @@ export default class ProcessorProperties {
    hasMixing: boolean = false
    currentWorkplaceIdx: number = 0
    workplaceOffsets: Vector3[] = []
-   absolute: boolean = false
+   // G-code defaults to absolute positioning; files may still switch with G90/G91
+   absolute: boolean = true
    firmwareRetraction: boolean = false
    units = Units.millimeters
    totalRenderedSegments: number = 0
@@ -75,14 +76,22 @@ export default class ProcessorProperties {
    }
 
    set CurrentFeedRate(value: number) {
-      if (this.currentFeedRate > this.maxFeedRate) {
-         this.maxFeedRate = this.currentFeedRate
-      }
-      if (this.currentFeedRate != 0 && this.currentFeedRate < this.minFeedRate) {
-         this.minFeedRate = this.currentFeedRate
-      }
-
       this.currentFeedRate = value
+   }
+
+   // Min/max only cover feed rates actually used while extruding - travel rates would compress the
+   // feed-rate color gradient into a fraction of its range
+   recordExtrusionFeedRate(value: number) {
+      if (value > this.maxFeedRate) {
+         this.maxFeedRate = value
+      }
+      if (value > 0 && value < this.minFeedRate) {
+         this.minFeedRate = value
+      }
+   }
+
+   get unitMultiplier(): number {
+      return this.units === Units.inches ? 25.4 : 1
    }
 
    get currentWorkplace() {
@@ -99,7 +108,9 @@ export default class ProcessorProperties {
 
    constructor() {
       this.workplaceOffsets.push(new Vector3(0, 0, 0)) //set a default workplace if we do not have workplaces
-      this.tools = tools // set the tools to the default tools
+      // Copy the default tool table - t.ts may extend it per file, which must not leak into the
+      // shared module-level array
+      this.tools = [...tools]
       this.currentTool = this.tools[0]
    }
 }

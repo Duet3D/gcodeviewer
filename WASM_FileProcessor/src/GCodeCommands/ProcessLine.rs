@@ -1,10 +1,10 @@
-use crate::gcode_line::{GCodeLine, CommentData, CommandData, MCodeData};
+use crate::gcode_line::{GCodeLine, CommentData, CommandData};
 use crate::processor_properties::ProcessorProperties;
 use crate::utils::{is_comment_line, detect_gcode_command, parse_parameter};
 use crate::GCodeCommands::G0G1::{parse_g0_g1_move, is_g0_g1_command};
 use crate::GCodeCommands::G2G3::parse_arc_move;
 use crate::GCodeCommands::G28::{parse_g28_home, parse_g29_bed_leveling};
-use crate::GCodeCommands::G90G91::{parse_g90_absolute, parse_g91_relative};
+use crate::GCodeCommands::G90G91::{parse_g90_absolute, parse_g91_relative, parse_g92_set_position};
 use crate::GCodeCommands::G20G21::{parse_g20_inches, parse_g21_millimeters};
 use crate::GCodeCommands::G10G11::{parse_g10_retract, parse_g11_unretract};
 use crate::GCodeCommands::ToolCommands::{parse_tool_command, parse_m_command};
@@ -40,6 +40,12 @@ pub fn process_line(
         let command_upper = command.to_uppercase();
         
         match command_upper.as_str() {
+            // Moves written without a space before the first parameter ("G1X10") miss the
+            // is_g0_g1_command fast path above and land here instead
+            "G0" | "G00" | "G1" | "G01" => {
+                return parse_g0_g1_move(props, line, file_position, line_number);
+            }
+
             // Positioning modes
             "G90" => {
                 return parse_g90_absolute(props, line, file_position, line_number);
@@ -47,7 +53,10 @@ pub fn process_line(
             "G91" => {
                 return parse_g91_relative(props, line, file_position, line_number);
             }
-            
+            "G92" => {
+                return parse_g92_set_position(props, line, file_position, line_number);
+            }
+
             // Units
             "G20" => {
                 return parse_g20_inches(props, line, file_position, line_number);
@@ -143,79 +152,6 @@ pub fn process_line(
     )))
 }
 
-/// Parse M-code commands
-fn parse_mcode(
-    props: &mut ProcessorProperties,
-    line: &str,
-    file_position: u32,
-    line_number: u32,
-    command: &str,
-) -> Result<GCodeLine, String> {
-    
-    // Extract M-code number
-    let mcode_num = if let Some(num_str) = command.strip_prefix('M') {
-        num_str.parse::<u32>().unwrap_or(0)
-    } else {
-        0
-    };
-    
-    let mut mcode_data = MCodeData::new(file_position, line_number, line.to_string(), mcode_num);
-    
-    // Parse parameters
-    let bytes = line.as_bytes();
-    let mut i = 0;
-    
-    while i < bytes.len() {
-        if let Some((letter, value, consumed)) = parse_parameter(bytes, i) {
-            mcode_data.parameters.push((letter.to_string(), value));
-            i += consumed;
-            
-            // Handle specific M-code behaviors
-            match (mcode_num, letter) {
-                // M104/M109 - Set/Wait for hotend temperature
-                (104 | 109, 'S') => {
-                    props.current_tool.temperature = value;
-                }
-                // M140/M190 - Set/Wait for bed temperature
-                (140 | 190, 'S') => {
-                    // Could track bed temperature if needed
-                }
-                // M600 - Filament change
-                (600, _) => {
-                    // Could trigger tool change logic
-                }
-                _ => {}
-            }
-        } else {
-            i += 1;
-        }
-    }
-    
-    Ok(GCodeLine::MCode(mcode_data))
-}
-
-/// Parse tool change commands (T0, T1, etc.)
-fn parse_tool_change(
-    props: &mut ProcessorProperties,
-    line: &str,
-    file_position: u32,
-    line_number: u32,
-    command: &str,
-) -> Result<GCodeLine, String> {
-    
-    // Extract tool number
-    let tool_num = if let Some(num_str) = command.strip_prefix('T') {
-        num_str.parse::<u8>().unwrap_or(0)
-    } else {
-        0
-    };
-    
-    // Update current tool
-    props.set_current_tool(tool_num);
-    
-    Ok(create_command(file_position, line_number, line, command.to_string()))
-}
-
 /// Create a generic command object
 fn create_command(
     file_position: u32,
@@ -224,11 +160,11 @@ fn create_command(
     command_type: String,
 ) -> GCodeLine {
     let mut cmd_data = CommandData::new(file_position, line_number, line.to_string(), command_type);
-    
+
     // Parse any parameters
     let bytes = line.as_bytes();
     let mut i = 0;
-    
+
     while i < bytes.len() {
         if let Some((letter, value, consumed)) = parse_parameter(bytes, i) {
             cmd_data.parameters.push((letter.to_string(), value));
@@ -237,42 +173,8 @@ fn create_command(
             i += 1;
         }
     }
-    
+
     GCodeLine::Command(cmd_data)
-}
-
-/// Fast line type detection without full parsing
-pub fn detect_line_type(line: &str) -> LineType {
-    let trimmed = line.trim();
-    
-    if is_comment_line(trimmed) {
-        LineType::Comment
-    } else if is_g0_g1_command(trimmed) {
-        LineType::Move
-    } else if let Some(command) = detect_gcode_command(trimmed) {
-        let upper = command.to_uppercase();
-        if upper.starts_with('M') {
-            LineType::MCode
-        } else if upper.starts_with('G') {
-            match upper.as_str() {
-                "G2" | "G02" | "G3" | "G03" => LineType::Arc,
-                _ => LineType::Command,
-            }
-        } else {
-            LineType::Command
-        }
-    } else {
-        LineType::Comment
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum LineType {
-    Move,
-    Arc,
-    Comment,
-    Command,
-    MCode,
 }
 
 #[cfg(test)]
@@ -339,13 +241,4 @@ mod tests {
         }
     }
     
-    #[test]
-    fn test_detect_line_type() {
-        assert_eq!(detect_line_type("; comment"), LineType::Comment);
-        assert_eq!(detect_line_type("G0 X10"), LineType::Move);
-        assert_eq!(detect_line_type("G1 Y20"), LineType::Move);
-        assert_eq!(detect_line_type("G90"), LineType::Command);
-        assert_eq!(detect_line_type("M104 S200"), LineType::MCode);
-        assert_eq!(detect_line_type("G2 X10 Y20"), LineType::Arc);
-    }
 }

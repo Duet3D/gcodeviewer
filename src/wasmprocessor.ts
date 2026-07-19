@@ -1,4 +1,4 @@
-import init, { GCodeProcessor, ProcessingResult, PositionData, RenderBuffers, get_version } from '../WASM_FileProcessor/pkg/gcode_file_processor';
+import init, { GCodeProcessor, ProcessingResult, RenderBuffers, get_version } from '../WASM_FileProcessor/pkg/gcode_file_processor';
 
 export interface WasmProcessingResult {
     success: boolean;
@@ -6,14 +6,6 @@ export interface WasmProcessingResult {
     lineCount: number;
     moveCount: number;
     processingTimeMs: number;
-}
-
-export interface WasmPositionData {
-    x: number;
-    y: number;
-    z: number;
-    feedRate: number;
-    extruding: boolean;
 }
 
 export interface WasmRenderBuffers {
@@ -42,7 +34,7 @@ export class WasmProcessor {
     }
 
     async processFile(
-        content: string, 
+        content: string,
         progressCallback?: (progress: number, label: string) => void
     ): Promise<WasmProcessingResult> {
         if (!this.initialized || !this.processor) {
@@ -50,57 +42,24 @@ export class WasmProcessor {
         }
 
         const result: ProcessingResult = this.processor.process_file(content, progressCallback);
-        
-        return {
+        const mapped = {
             success: result.success,
             errorMessage: result.error_message,
             lineCount: result.line_count,
             moveCount: result.move_count,
             processingTimeMs: result.processing_time_ms
         };
+        result.free();
+        return mapped;
     }
 
-    getPositionData(filePosition: number): WasmPositionData | undefined {
+    // Packed [filePosition, x, y, z, feedRate, extruding] per entry, sorted by file position
+    getPositionBuffer(): Float64Array {
         if (!this.initialized || !this.processor) {
             throw new Error('WASM processor not initialized');
         }
 
-        const posData: PositionData | undefined = this.processor.get_position_data(filePosition);
-        if (!posData) {
-            return undefined;
-        }
-
-        return {
-            x: posData.x,
-            y: posData.y,
-            z: posData.z,
-            feedRate: posData.feed_rate,
-            extruding: posData.extruding
-        };
-    }
-
-    getSortedPositions(): Uint32Array {
-        if (!this.initialized || !this.processor) {
-            throw new Error('WASM processor not initialized');
-        }
-
-        return this.processor.get_sorted_positions();
-    }
-
-    getPositionCount(): number {
-        if (!this.initialized || !this.processor) {
-            throw new Error('WASM processor not initialized');
-        }
-
-        return this.processor.get_position_count();
-    }
-
-    findClosestPosition(targetPosition: number): number | undefined {
-        if (!this.initialized || !this.processor) {
-            throw new Error('WASM processor not initialized');
-        }
-
-        return this.processor.find_closest_position(targetPosition);
+        return this.processor.get_position_buffer();
     }
 
     generateRenderBuffers(nozzleSize: number = 0.4, padding: number = 0, progressCallback?: (progress: number, label: string) => void): WasmRenderBuffers {
@@ -108,19 +67,27 @@ export class WasmProcessor {
             throw new Error('WASM processor not initialized');
         }
 
+        // take_* moves each buffer across the boundary once; free() releases the emptied wasm object
+        // immediately instead of waiting for the FinalizationRegistry
         const renderBuffers: RenderBuffers = this.processor.generate_render_buffers(nozzleSize, padding, progressCallback);
-        
-        return {
+        const result = {
             segmentCount: renderBuffers.segment_count,
-            matrixData: new Float32Array(renderBuffers.matrix_data),
-            colorData: new Float32Array(renderBuffers.color_data),
-            pickData: new Float32Array(renderBuffers.pick_data),
-            filePositionData: new Float32Array(renderBuffers.file_position_data),
-            fileEndPositionData: new Float32Array(renderBuffers.file_end_position_data),
-            toolData: new Float32Array(renderBuffers.tool_data),
-            feedRateData: new Float32Array(renderBuffers.feed_rate_data),
-            isPerimeterData: new Float32Array(renderBuffers.is_perimeter_data),
+            matrixData: renderBuffers.take_matrix_data(),
+            colorData: renderBuffers.take_color_data(),
+            pickData: renderBuffers.take_pick_data(),
+            filePositionData: renderBuffers.take_file_position_data(),
+            fileEndPositionData: renderBuffers.take_file_end_position_data(),
+            toolData: renderBuffers.take_tool_data(),
+            feedRateData: renderBuffers.take_feed_rate_data(),
+            isPerimeterData: renderBuffers.take_is_perimeter_data(),
         };
+        renderBuffers.free();
+        return result;
+    }
+
+    // Drop the parsed data held in wasm linear memory once JS has copied what it needs
+    clearData(): void {
+        this.processor?.clear_data();
     }
 
     dispose(): void {

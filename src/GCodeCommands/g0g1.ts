@@ -13,6 +13,7 @@ export default function (props: Props, line: string): Base {
    const tokens = line.split(tokenList)
 
    let forceAbsolute = false
+   const unit = props.unitMultiplier
 
    if (props.zBelt) tokens.reverse()
 
@@ -32,34 +33,34 @@ export default function (props: Props, line: string): Base {
          }
          case 'X':
             if (props.zBelt) {
-               props.currentPosition.x = Number(token.substring(1))
+               props.currentPosition.x = Number(token.substring(1)) * unit
             } else {
                props.currentPosition.x =
                   props.absolute || forceAbsolute
-                     ? Number(token.substring(1)) + props.currentWorkplace.x
-                     : props.currentPosition.x + Number(token.substring(1))
+                     ? Number(token.substring(1)) * unit + props.currentWorkplace.x
+                     : props.currentPosition.x + Number(token.substring(1)) * unit
             }
             break
          case 'Y':
             if (props.zBelt) {
-               props.currentPosition.y = Number(token.substring(1)) * props.hyp
+               props.currentPosition.y = Number(token.substring(1)) * unit * props.hyp
                props.currentPosition.z = props.currentZ + props.currentPosition.y * props.adj
             } else {
                props.currentPosition.z =
                   props.absolute || forceAbsolute
-                     ? Number(token.substring(1)) + props.currentWorkplace.y
-                     : props.currentPosition.z + Number(token.substring(1))
+                     ? Number(token.substring(1)) * unit + props.currentWorkplace.y
+                     : props.currentPosition.z + Number(token.substring(1)) * unit
             }
             break
          case 'Z':
             if (props.zBelt) {
-               props.currentZ = -Number(token.substring(1))
+               props.currentZ = -Number(token.substring(1)) * unit
                props.currentPosition.z = props.currentZ + props.currentPosition.y * props.adj
             } else {
                props.currentPosition.y =
                   props.absolute || forceAbsolute
-                     ? Number(token.substring(1)) + props.currentWorkplace.z
-                     : props.currentPosition.y + Number(token.substring(1))
+                     ? Number(token.substring(1)) * unit + props.currentWorkplace.z
+                     : props.currentPosition.y + Number(token.substring(1)) * unit
             }
             break
          case 'E':
@@ -68,7 +69,8 @@ export default function (props: Props, line: string): Base {
             }
             break
          case 'F':
-            if (move.extruding) props.CurrentFeedRate = Number(token.substring(1))
+            // F is modal for the whole line regardless of token order and extrusion state
+            props.CurrentFeedRate = Number(token.substring(1)) * unit
             break
       }
    }
@@ -79,6 +81,9 @@ export default function (props: Props, line: string): Base {
    }
 
    move.feedRate = props.CurrentFeedRate
+   if (move.extruding) {
+      props.recordExtrusionFeedRate(move.feedRate)
+   }
    props.currentPosition.toArray(move.end)
 
    return move

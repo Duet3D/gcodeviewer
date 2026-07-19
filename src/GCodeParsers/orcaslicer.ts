@@ -1,4 +1,3 @@
-import ProcessorProperties from '../processorproperties'
 import SlicerBase from './slicerbase'
 
 export default class OrcaSlicer extends SlicerBase {
@@ -73,19 +72,30 @@ export default class OrcaSlicer extends SlicerBase {
    }
 
    processComment(comment: string) {
-      if (comment.startsWith(';TYPE:')) {
-         this.feature = comment.substring(6).trim()
-         const feature = this.featureList[this.feature]
-         if (feature) {
-            this.currentFeatureColor = feature.color
-            this.currentIsPerimeter = feature.perimeter
-            this.currentIsSupport = feature.support
-         } else {
-            this.reportMissingFeature(this.feature)
-            this.currentFeatureColor = [1, 1, 1, 1]
-            this.currentIsPerimeter = true
-            this.currentIsSupport = false
-         }
+      // OrcaSlicer emits "; FEATURE: Outer wall" (BambuStudio heritage) in mixed case; older or
+      // rebranded builds may still use ";TYPE:". Accept both and normalize the case for lookup
+      let feature: string | null = null
+      if (comment.startsWith('; FEATURE:')) {
+         feature = comment.substring(10)
+      } else if (comment.startsWith(';FEATURE:')) {
+         feature = comment.substring(9)
+      } else if (comment.startsWith(';TYPE:')) {
+         feature = comment.substring(6)
+      }
+      if (feature === null) {
+         return
+      }
+      this.feature = feature.trim()
+      const entry = this.featureList[this.feature.toUpperCase()]
+      if (entry) {
+         this.currentFeatureColor = entry.color
+         this.currentIsPerimeter = entry.perimeter
+         this.currentIsSupport = entry.support
+      } else {
+         this.reportMissingFeature(this.feature)
+         this.currentFeatureColor = [1, 1, 1, 1]
+         this.currentIsPerimeter = true
+         this.currentIsSupport = false
       }
    }
 
@@ -100,6 +110,4 @@ export default class OrcaSlicer extends SlicerBase {
    isSupport(): boolean {
       return this.currentIsSupport
    }
-
-   processHeader(file: string[], props: ProcessorProperties) {}
 }

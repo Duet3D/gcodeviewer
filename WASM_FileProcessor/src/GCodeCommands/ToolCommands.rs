@@ -99,10 +99,11 @@ pub fn parse_tool_command(
         "UNKNOWN_TOOL_COMMAND"
     };
     
-    // Update processor state
+    // Update processor state - switch to the selected tool (creating it if needed) rather than
+    // renaming the current one
     if let Some(tool_num) = tool_number {
         if command.starts_with('T') || command.starts_with('t') {
-            properties.current_tool.tool_number = tool_num as u8;
+            properties.set_current_tool(tool_num as u8);
         }
     }
     

@@ -127,7 +127,10 @@ onMounted(async () => {
    }
 })
 
-onUnmounted(() => {})
+onUnmounted(() => {
+   viewer?.unload()
+   viewer = null
+})
 
 async function refreshProcessingStats() {
    if (viewer && viewer.getProcessingStats) {

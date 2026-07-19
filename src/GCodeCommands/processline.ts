@@ -74,39 +74,44 @@ function parseG0G1Fast(props: ProcessorProperties, line: string): Base | null {
    const move = new Move(props, line)
    move.tool = props.currentTool.toolNumber
    props.currentPosition.toArray(move.start)
-   
+
    // Update positions
+   const unit = props.unitMultiplier
    if (x !== null) {
-      props.currentPosition.x = props.absolute ? x + props.currentWorkplace.x : props.currentPosition.x + x
+      props.currentPosition.x = props.absolute ? x * unit + props.currentWorkplace.x : props.currentPosition.x + x * unit
    }
    if (y !== null) {
-      props.currentPosition.z = props.absolute ? y + props.currentWorkplace.y : props.currentPosition.z + y
+      props.currentPosition.z = props.absolute ? y * unit + props.currentWorkplace.y : props.currentPosition.z + y * unit
    }
    if (z !== null) {
-      props.currentPosition.y = props.absolute ? z + props.currentWorkplace.z : props.currentPosition.y + z
+      props.currentPosition.y = props.absolute ? z * unit + props.currentWorkplace.z : props.currentPosition.y + z * unit
    }
-   
+
    if (isG1) {
       props.currentTool.color.toArray(move.color)
       move.extruding = props.cncMode
    }
-   
+
    if (e !== null && e > 0) {
       move.extruding = true
    }
-   
+
    if (!move.extruding) {
       move.lineType = 'T'
       move.tool = 255
    }
-   
-   if (f !== null && move.extruding) {
-      props.CurrentFeedRate = f
+
+   // F is modal and applies to the whole line no matter where the token sits or whether the move extrudes
+   if (f !== null) {
+      props.CurrentFeedRate = f * unit
    }
-   
+
    move.feedRate = props.CurrentFeedRate
+   if (move.extruding) {
+      props.recordExtrusionFeedRate(move.feedRate)
+   }
    props.currentPosition.toArray(move.end)
-   
+
    return move
 }
 
@@ -171,10 +176,11 @@ export function ProcessLine(props: ProcessorProperties, line: string): Base {
       return GCodeCommands.t(props, line)
    }
    
-   // Ultra-fast path for common G0/G1 moves (80%+ of lines)
-   if ((workingLine[0] === 'G' || workingLine[0] === 'g') && 
+   // Ultra-fast path for common G0/G1 moves (80%+ of lines). The third character may only be '0'
+   // after "G0" (G00) - accepting it after "G1" would swallow G10 offset/retract commands as moves
+   if ((workingLine[0] === 'G' || workingLine[0] === 'g') &&
        (workingLine[1] === '0' || workingLine[1] === '1') &&
-       (workingLine[2] === ' ' || workingLine[2] === '0')) {
+       (workingLine[2] === ' ' || (workingLine[1] === '0' && workingLine[2] === '0'))) {
       const fastResult = parseG0G1Fast(props, line)
       if (fastResult) {
          // Apply firstGCodeByte/lastGCodeByte logic
@@ -232,8 +238,11 @@ export function ProcessLine(props: ProcessorProperties, line: string): Base {
             case 'G91':
                result = GCodeCommands.g91(props, line)
                break
+            case 'G92':
+               result = GCodeCommands.g92(props, line)
+               break
          }
-         
+
          // Apply firstGCodeByte/lastGCodeByte logic for fast path too
          if (result) {
             if (props.firstGCodeByte == 0 && result.lineType == 'L') {
@@ -302,6 +311,9 @@ export function ProcessLine(props: ProcessorProperties, line: string): Base {
          break
       case 'G91':
          result = GCodeCommands.g91(props, line)
+         break
+      case 'G92':
+         result = GCodeCommands.g92(props, line)
          break
       case 'M3':
       case 'M4':

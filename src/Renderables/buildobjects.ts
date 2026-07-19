@@ -33,7 +33,7 @@ export default class BuildObjects {
 
    constructor(scene: Scene) {
       this.scene = scene
-      this.rebuildMaterials()
+      this.buildMaterials()
    }
 
    setBuildMaterial(name: string, color: Color3, alpha?: number): StandardMaterial {
@@ -51,7 +51,7 @@ export default class BuildObjects {
       return material
    }
 
-   rebuildMaterials() {
+   buildMaterials() {
       this.baseMaterial = this.setBuildMaterial('BuildObjectBaseMaterial', new Color3(0.1, 0.5, 0.1), 0.25)
       this.highlightMaterial = this.setBuildMaterial('BuildObjectHighlightMaterial', new Color3(0.8, 0.8, 0.8))
       this.cancelledMaterial = this.setBuildMaterial('BuildObjectCancelledMaterial', new Color3(1, 0, 0), 0.4)
@@ -82,9 +82,12 @@ export default class BuildObjects {
    }
 
    loadObjectBoundaries(boundaryObjects: any[]) {
-      this.rebuildMaterials()
       if (this.buildObjectMeshes.length > 0) {
-         // Labels are parented to the object meshes, so disposing the meshes disposes the labels too
+         // Each label owns its DynamicTexture and material, so those must be disposed with it; the
+         // object meshes share the four class-level materials and must NOT dispose them
+         for (const label of this.labels) {
+            label.dispose(false, true)
+         }
          for (const mesh of this.buildObjectMeshes) {
             mesh.dispose()
          }
