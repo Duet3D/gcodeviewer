@@ -72,6 +72,7 @@ export default class ViewerProxy {
    // this they leak on every mount/unmount and keep posting into a terminated worker
    private registeredListeners: Array<{ target: EventTarget; eventName: string; handler: EventListener; opt: any }> = []
    private unloadFallback: ReturnType<typeof setTimeout> | null = null
+   private suspended = false
 
    constructor(canvas: HTMLCanvasElement) {
       this.mainCanvas = canvas
@@ -107,7 +108,7 @@ export default class ViewerProxy {
       // The worker's faked document cannot observe tab visibility, so mirror it over to pause the
       // render loop while the tab is hidden
       this.addTrackedListener(document, 'visibilitychange', () => {
-         this.webWorker.postMessage({ type: 'visibility', hidden: document.hidden })
+         this.webWorker.postMessage({ type: 'visibility', hidden: this.suspended || document.hidden })
       })
    }
 
@@ -218,6 +219,13 @@ export default class ViewerProxy {
 
    loadFile(file): void {
       this.webWorker.postMessage({ type: 'loadFile', file: file })
+   }
+
+   // Host-driven pause for kept-alive components: shares the worker's tab-visibility gate, so the
+   // render loop stops while the component is deactivated and the two states cannot fight each other
+   suspend(suspended: boolean): void {
+      this.suspended = suspended
+      this.webWorker.postMessage({ type: 'visibility', hidden: this.suspended || document.hidden })
    }
 
    unload(): void {
