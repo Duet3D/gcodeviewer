@@ -4,6 +4,9 @@ import { Color4 } from '@babylonjs/core/Maths/math.color'
 import SlicerBase from './GCodeParsers/slicerbase'
 import GenericBase from './GCodeParsers/genericbase'
 
+// Fallback extrusion height until two extruding layers have been seen
+export const DEFAULT_LAYER_HEIGHT = 0.2
+
 export enum ColorMode {
    Tool,
    Feature,
@@ -28,6 +31,7 @@ export default class ProcessorProperties {
    lineCount: number = 0
    layerDictionary: [] = []
    previousZ: number = 0 //Last Z value where extrusion occured  - This may need to go away to depend on slicer especially for non-planar prints
+   currentLayerHeight: number = DEFAULT_LAYER_HEIGHT
    filePosition: number = 0
    lineNumber: number = 0
    tools: Tool[] = []
@@ -81,6 +85,18 @@ export default class ProcessorProperties {
 
    // Min/max only cover feed rates actually used while extruding - travel rates would compress the
    // feed-rate color gradient into a fraction of its range
+   // Layer height is the Z delta between consecutive extruding layers. Non-planar prints and Z
+   // hops would otherwise produce nonsense, so implausible deltas keep the previous value
+   recordLayerHeight(z: number) {
+      const delta = Math.abs(z - this.previousZ)
+      if (delta > 0.001) {
+         if (delta < 5) {
+            this.currentLayerHeight = delta
+         }
+         this.previousZ = z
+      }
+   }
+
    recordExtrusionFeedRate(value: number) {
       if (value > this.maxFeedRate) {
          this.maxFeedRate = value

@@ -19,6 +19,7 @@ import { Plane } from '@babylonjs/core/Maths/math.plane'
 import ViewBox, { ViewBoxDirection } from './Renderables/viewbox'
 import Bed, { BuildVolume, RenderBedMode } from './Renderables/bed'
 import Axes from './Renderables/axes'
+import Workplace from './Renderables/workplace'
 import BuildObjects from './Renderables/buildobjects'
 import '@babylonjs/core/Rendering/'
 
@@ -43,6 +44,7 @@ export default class Viewer {
    viewBox: ViewBox | null = null
    bed: Bed | null = null
    axes: Axes | null = null
+   workplace: Workplace | null = null
    buildObjects: BuildObjects | null = null
    zTopClipValue: number | null = null
    zBottomClipValue: number | null = null
@@ -194,6 +196,11 @@ export default class Viewer {
          this.registerClipIgnore(mesh)
       }
       this.axes.render()
+
+      this.workplace = new Workplace(this.scene)
+      this.workplace.registerClipIgnore = (mesh) => {
+         this.registerClipIgnore(mesh)
+      }
 
       this.buildObjects = new BuildObjects(this.scene)
       this.buildObjects.getMaxHeight = () => {
@@ -386,6 +393,11 @@ export default class Viewer {
 
    setAllowSeek(enabled: boolean) {
       this.allowSeek = enabled
+      this.processor.allowSeek = enabled
+      if (!enabled) {
+         // Drop whatever the pointer highlighted before; no real pick colour is negative
+         this.processor.modelMaterial.forEach((m) => m.setPickColor([-1, -1, -1]))
+      }
    }
 
    showViewBox(visible: boolean) {
@@ -458,6 +470,34 @@ export default class Viewer {
       this.processor.modelMaterial.forEach((m) => m.setShowTravels(show))
    }
 
+   // Keep printed travels on screen instead of discarding them once the flash has passed
+   setPersistTravels(persist: boolean) {
+      this.processor.modelMaterial.forEach((m) => m.setPersistTravels(persist))
+   }
+
+   // Feed rate gradient endpoints in mm/min; null restores the range measured while parsing
+   setFeedRateRange(min: number | null, max: number | null) {
+      this.processor.setFeedRateRange(min, max)
+   }
+
+   // Colours the feed rate render mode interpolates between (hex strings)
+   setFeedRateColors(minColor: string, maxColor: string) {
+      const min = Color4.FromHexString(minColor.padEnd(9, 'F'))
+      const max = Color4.FromHexString(maxColor.padEnd(9, 'F'))
+      this.processor.modelMaterial.forEach((m) => m.setMinFeedColor([min.r * 255, min.g * 255, min.b * 255]))
+      this.processor.modelMaterial.forEach((m) => m.setMaxFeedColor([max.r * 255, max.g * 255, max.b * 255]))
+   }
+
+   // Specular highlights on the extrusion geometry; the line mesh variant ignores it
+   setSpecular(enabled: boolean) {
+      this.processor.modelMaterial.forEach((m) => m.setSpecular(enabled))
+   }
+
+   // Absolute nozzle marker position in G-code coordinates, for following a live job
+   setNozzlePosition(x: number, y: number, z: number, animate: boolean) {
+      this.processor.setNozzlePosition(x, y, z, animate)
+   }
+
    // Playback speed multiplier for the nozzle animation (the scrubber's play button)
    setAnimationSpeed(speed: number) {
       this.processor.getNozzle()?.setAnimationSpeed(speed)
@@ -473,6 +513,12 @@ export default class Viewer {
 
    showAxes(visible: boolean) {
       this.axes?.show(visible)
+   }
+
+   // Origin markers for the workplaces the file shifts into. Only ones with a non-zero offset are
+   // drawn, so a file that never touches G10 L2/L20 shows nothing
+   showWorkplace(visible: boolean) {
+      this.workplace?.show(visible)
    }
 
    loadObjectBoundaries(objects: any[]) {
@@ -517,6 +563,8 @@ export default class Viewer {
 
    async loadFile(file) {
       await this.processor.loadFile(file)
+      // Workplace offsets are only known once the file has been parsed
+      this.workplace?.render(this.processor.processorProperties.workplaceOffsets)
    }
 
    setMaxFPS(fps) {

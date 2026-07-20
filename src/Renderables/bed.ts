@@ -195,6 +195,10 @@ export default class Bed {
    }
 
    setBedColor(color: string): void {
+      // An unusable colour would rebuild the bed with a black grid material, i.e. no visible bed
+      if (!/^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(color)) {
+         return
+      }
       this.bedLineColor = color
       this.planeMaterial.dispose()
       this.planeMaterial = this.buildGridMaterial()

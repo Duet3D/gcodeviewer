@@ -364,6 +364,49 @@ export default class ViewerProxy {
       this.webWorker.postMessage({ type: 'setShowTravels', show: show })
    }
 
+   // Keep travels visible after they have been printed instead of discarding them past the flash
+   setPersistTravels(persist: boolean): void {
+      this.webWorker.postMessage({ type: 'setPersistTravels', persist: persist })
+   }
+
+   // Feed rate gradient endpoints, in mm/min. Both default to the range measured while parsing
+   setFeedRateRange(min: number, max: number): void {
+      this.webWorker.postMessage({ type: 'setFeedRateRange', min: min, max: max })
+   }
+
+   // Colours the feed rate render mode interpolates between (hex strings)
+   setFeedRateColors(minColor: string, maxColor: string): void {
+      this.webWorker.postMessage({ type: 'setFeedRateColors', minColor: minColor, maxColor: maxColor })
+   }
+
+   setSpecular(enabled: boolean): void {
+      this.webWorker.postMessage({ type: 'setSpecular', enabled: enabled })
+   }
+
+   // Absolute nozzle marker position in G-code coordinates; the axis swap happens in the worker
+   setNozzlePosition(x: number, y: number, z: number, animate: boolean = false): void {
+      this.webWorker.postMessage({ type: 'setNozzlePosition', x: x, y: y, z: z, animate: animate })
+   }
+
+   // Parse-time flags: the caller has to reload the file for any of these to take effect
+   // Extrusion width for high quality rendering: an explicit override beats the value the slicer
+   // wrote into the file, which beats the caller's own guess. null drops a step
+   setNozzleDiameter(override: number | null, fallback: number | null): void {
+      this.webWorker.postMessage({ type: 'setNozzleDiameter', override: override, fallback: fallback })
+   }
+
+   setHQRendering(enabled: boolean): void {
+      this.webWorker.postMessage({ type: 'setHQRendering', enabled: enabled })
+   }
+
+   setG1AsExtrusion(enabled: boolean): void {
+      this.webWorker.postMessage({ type: 'setG1AsExtrusion', enabled: enabled })
+   }
+
+   setZBelt(enabled: boolean, gantryAngle: number): void {
+      this.webWorker.postMessage({ type: 'setZBelt', enabled: enabled, gantryAngle: gantryAngle })
+   }
+
    setAnimationSpeed(speed: number): void {
       this.webWorker.postMessage({ type: 'setAnimationSpeed', speed: speed })
    }
@@ -378,6 +421,12 @@ export default class ViewerProxy {
 
    showAxes(visible: boolean): void {
       this.webWorker.postMessage({ type: 'showAxes', visible: visible })
+   }
+
+
+   // Origin markers for workplaces the file shifts into with G10 L2/L20
+   showWorkplace(visible: boolean): void {
+      this.webWorker.postMessage({ type: 'showWorkplace', visible: visible })
    }
 
    // Boundary data from the printer object model; objectSelected/objectLabel events arrive via passThru

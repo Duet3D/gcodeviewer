@@ -62,14 +62,14 @@ export class WasmProcessor {
         return this.processor.get_position_buffer();
     }
 
-    generateRenderBuffers(nozzleSize: number = 0.4, padding: number = 0, progressCallback?: (progress: number, label: string) => void): WasmRenderBuffers {
+    generateRenderBuffers(nozzleSize: number = 0.4, padding: number = 0, highQuality: boolean = false, progressCallback?: (progress: number, label: string) => void): WasmRenderBuffers {
         if (!this.initialized || !this.processor) {
             throw new Error('WASM processor not initialized');
         }
 
         // take_* moves each buffer across the boundary once; free() releases the emptied wasm object
         // immediately instead of waiting for the FinalizationRegistry
-        const renderBuffers: RenderBuffers = this.processor.generate_render_buffers(nozzleSize, padding, progressCallback);
+        const renderBuffers: RenderBuffers = this.processor.generate_render_buffers(nozzleSize, padding, highQuality, progressCallback);
         const result = {
             segmentCount: renderBuffers.segment_count,
             matrixData: renderBuffers.take_matrix_data(),
@@ -83,6 +83,16 @@ export class WasmProcessor {
         };
         renderBuffers.free();
         return result;
+    }
+
+    // Parse-time flags. Silently ignored before initialize() creates the processor, so Processor
+    // re-applies its configuration once WASM comes up
+    setG1AsExtrusion(enabled: boolean): void {
+        this.processor?.set_g1_as_extrusion(enabled);
+    }
+
+    setZBelt(enabled: boolean, gantryAngleDegrees: number): void {
+        this.processor?.set_z_belt(enabled, gantryAngleDegrees);
     }
 
     // Drop the parsed data held in wasm linear memory once JS has copied what it needs

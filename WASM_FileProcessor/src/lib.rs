@@ -308,6 +308,18 @@ impl GCodeProcessor {
         }
     }
 
+    /// Parse-time configuration. Both outlive `ProcessorProperties::reset()`, so they only need to
+    /// be set once per processor, but the caller must reload the file for them to take effect
+    #[wasm_bindgen]
+    pub fn set_g1_as_extrusion(&mut self, enabled: bool) {
+        self.processor.set_cnc_mode(enabled);
+    }
+
+    #[wasm_bindgen]
+    pub fn set_z_belt(&mut self, enabled: bool, gantry_angle_degrees: f64) {
+        self.processor.set_z_belt(enabled, gantry_angle_degrees);
+    }
+
     /// Process G-code file and return results
     #[wasm_bindgen]
     pub fn process_file(&mut self,
@@ -388,7 +400,9 @@ impl GCodeProcessor {
 
     /// Generate render buffers for fast mesh creation in JavaScript
     #[wasm_bindgen]
-    pub fn generate_render_buffers(&self, nozzle_size: f32, padding: f32, progress_callback: Option<ProgressCallback>) -> RenderBuffers {
+    /// `high_quality` switches from the fixed default extrusion height to the layer height
+    /// measured while parsing
+    pub fn generate_render_buffers(&self, nozzle_size: f32, padding: f32, high_quality: bool, progress_callback: Option<ProgressCallback>) -> RenderBuffers {
         let start_time = js_sys::Date::now();
         console_log!("Generating render buffers for {} segments", self.render_segments.len());
 
@@ -419,7 +433,7 @@ impl GCodeProcessor {
             }
 
             // Calculate matrix components (equivalent to TypeScript renderLine())
-            let (matrix, color) = self.calculate_render_matrix(pos_data, nozzle_size, padding);
+            let (matrix, color) = self.calculate_render_matrix(pos_data, nozzle_size, padding, high_quality);
 
             // Add matrix data (16 floats for 4x4 matrix in column-major order)
             matrix_data.extend_from_slice(&matrix);
@@ -474,7 +488,7 @@ impl GCodeProcessor {
     }
 
     // Helper function to calculate render matrix (equivalent to Move.renderLine())
-    fn calculate_render_matrix(&self, pos_data: &PositionData, nozzle_size: f32, padding: f32) -> ([f32; 16], [f32; 4]) {
+    fn calculate_render_matrix(&self, pos_data: &PositionData, nozzle_size: f32, padding: f32, high_quality: bool) -> ([f32; 16], [f32; 4]) {
         // Replicate TypeScript Move.renderLine() logic exactly
         
         // Calculate length with padding (matches TypeScript: const length = this.length + padding * 0.1)
@@ -560,7 +574,7 @@ impl GCodeProcessor {
         
         // Scale factors (matches TypeScript: new Vector3(length, this.layerHeight, nozzleSize))
         let scale_x = length as f64;
-        let scale_y = pos_data.layer_height;
+        let scale_y = if high_quality { pos_data.layer_height } else { crate::processor_properties::DEFAULT_LAYER_HEIGHT };
         let scale_z = nozzle_size as f64;
         
         // Compose transformation matrix exactly like Babylon.js Matrix.Compose(scale, rotation, translation)

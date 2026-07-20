@@ -62,7 +62,7 @@ export default class Move extends Base {
    }
 
    //Padding is also doing a conversion from meters to mm -- Need to change how this is working
-   renderLine(nozzleSize = 0.4, padding = 0): MoveData {
+   renderLine(nozzleSize = 0.4, padding = 0, layerHeight?: number): MoveData {
       this.colorId = numToColor(this.lineNumber)
       const p: MoveData = new MoveData()
       const length = this.length + padding * 0.1
@@ -72,7 +72,7 @@ export default class Move extends Base {
       const phi = Math.atan2(v[2], v[0])
       const theta = Math.acos(v[1] / r)
       p.Matrix = Matrix.Compose(
-         new Vector3(length, this.layerHeight, nozzleSize),
+         new Vector3(length, layerHeight ?? this.layerHeight, nozzleSize),
          Quaternion.FromEulerVector(new Vector3(0, -phi, PIOVER2 - theta)),
          new Vector3(midPoint[0], midPoint[1], midPoint[2]),
       )

@@ -83,6 +83,8 @@ export default function (props: Props, line: string): Base {
    move.feedRate = props.CurrentFeedRate
    if (move.extruding) {
       props.recordExtrusionFeedRate(move.feedRate)
+      props.recordLayerHeight(props.currentPosition.y)
+      move.layerHeight = props.currentLayerHeight
    }
    props.currentPosition.toArray(move.end)
 

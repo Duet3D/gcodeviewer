@@ -1,5 +1,5 @@
 import { Base, Move, ArcMove, Move_Thin } from './GCodeLines'
-import ProcessorProperties from './processorproperties'
+import ProcessorProperties, { DEFAULT_LAYER_HEIGHT } from './processorproperties'
 import { ProcessLine } from './GCodeCommands/processline'
 import { Scene } from '@babylonjs/core/scene'
 import { MeshBuilder } from '@babylonjs/core/Meshes/meshBuilder'
@@ -17,6 +17,12 @@ import LineShaderMaterial from './lineshader'
 import Nozzle from './Renderables/nozzle'
 import { WasmProcessor, WasmRenderBuffers } from './wasmprocessor'
 
+// Extrusion width used unless high quality rendering supplies the real tool diameter
+const DEFAULT_NOZZLE_SIZE = 0.4
+
+// How much of each end of the file is searched for the slicer's nozzle diameter setting
+const HEADER_SCAN_BYTES = 65536
+
 export default class Processor {
    gCodeLines: Base[] = []
    processorProperties: ProcessorProperties = new ProcessorProperties()
@@ -30,8 +36,25 @@ export default class Processor {
    modelMaterial: LineShaderMaterial[] = []
    filePosition: number = 0
    focusedColorId = 0
+   // Hover highlighting is the affordance for click-to-seek, so it follows the same flag
+   allowSeek = true
    lastMeshMode = 0
    perimeterOnly = false
+   // Feed rate gradient overrides. Null means "use the range measured while parsing"
+   userMinFeedRate: number | null = null
+   userMaxFeedRate: number | null = null
+   // Parse-time configuration: it has to survive the ProcessorProperties rebuild that every
+   // parse pass does, and changing it only takes effect on the next load
+   g1AsExtrusion = false
+   // Real tool diameter and measured layer height instead of the fixed defaults. Needs a reload
+   hqRendering = false
+   // Extrusion width resolution, highest precedence first: an explicit override, the value the
+   // slicer wrote into the file, then whatever the caller could infer for itself
+   nozzleDiameterOverride: number | null = null
+   nozzleDiameterFallback: number | null = null
+   private parsedNozzleDiameter: number | null = null
+   zBelt = false
+   gantryAngle = 45
    // The single retained copy of the file text; gCodeLines store only byte offsets and re-slice
    // from here via lineText()
    originalFile: string | undefined
@@ -70,6 +93,8 @@ export default class Processor {
       if (!this.wasmProcessor) {
          this.wasmProcessor = new WasmProcessor()
          await this.wasmProcessor.initialize()
+         this.wasmProcessor.setG1AsExtrusion(this.g1AsExtrusion)
+         this.wasmProcessor.setZBelt(this.zBelt, this.gantryAngle)
          this.processingStats.wasmEnabled = true
          console.log('WASM processing enabled for G-code parsing')
       }
@@ -180,8 +205,8 @@ export default class Processor {
       this.originalFile = file
       // Buffers from a previous WASM load must not leak into this one, otherwise a TS-parsed file would render the previous file's geometry
       this.wasmRenderBuffers = null
-      this.processorProperties = new ProcessorProperties() //Reset for now
-      this.processorProperties.slicer = slicerFactory(file)
+      this.processorProperties = this.buildProcessorProperties(file)
+      this.parsedNozzleDiameter = this.findNozzleDiameter(file)
 
       // Reset processing stats
       const startTime = performance.now()
@@ -274,7 +299,9 @@ export default class Processor {
                lineNumber: o.lineNumber,
                filePosition: o.filePosition,
             })
-            this.modelMaterial.forEach((m) => m.setPickColor(colorId))
+            if (this.allowSeek) {
+               this.modelMaterial.forEach((m) => m.setPickColor(colorId))
+            }
          }
       }
 
@@ -284,8 +311,7 @@ export default class Processor {
          this.processorProperties.minFeedRate = 0
          this.processorProperties.maxFeedRate = 1
       }
-      this.modelMaterial.forEach((m) => m.setMaxFeedRate(this.processorProperties.maxFeedRate))
-      this.modelMaterial.forEach((m) => m.setMinFeedRate(this.processorProperties.minFeedRate))
+      this.applyFeedRateRange()
       // Re-assert the perimeter-only filter on the freshly built materials (meshes always carry the
       // full geometry now, so toggling it is a cheap uniform change rather than a reparse)
       this.modelMaterial.forEach((m) => m.setPerimeterOnly(this.perimeterOnly))
@@ -308,6 +334,9 @@ export default class Processor {
          type: 'fileloaded',
          start: startByte,
          end: endByte,
+         // null when the file carried no nozzle diameter, so the consumer can tell whether its own
+         // fallback is what ends up being used
+         nozzleDiameter: this.parsedNozzleDiameter,
       })
 
       // Initialize nozzle position to start of print
@@ -505,7 +534,7 @@ export default class Processor {
          console.log('🚀 Generating render buffers with WASM...')
 
          try {
-            const wasmRenderBuffers = this.wasmProcessor!.generateRenderBuffers(0.4, 0, (progress: number, label: string) => {
+            const wasmRenderBuffers = this.wasmProcessor!.generateRenderBuffers(this.extrusionWidth(), 0, this.hqRendering, (progress: number, label: string) => {
                this.worker.postMessage({
                   type: 'progress',
                   progress: progress,
@@ -525,8 +554,7 @@ export default class Processor {
             const compatStartTime = performance.now()
 
             // Reset processor state for TypeScript parsing phase
-            this.processorProperties = new ProcessorProperties()
-            this.processorProperties.slicer = slicerFactory(file)
+            this.processorProperties = this.buildProcessorProperties(file)
 
             await this.loadFileStreamedWithPositions(file)
             const compatTime = performance.now() - compatStartTime
@@ -539,8 +567,7 @@ export default class Processor {
             console.log('🔧 Building TypeScript G-code objects for rendering...')
 
             // Reset processor state for TypeScript parsing phase
-            this.processorProperties = new ProcessorProperties()
-            this.processorProperties.slicer = slicerFactory(file)
+            this.processorProperties = this.buildProcessorProperties(file)
 
             await this.loadFileStreamedWithPositions(file)
             this.processingStats.typescriptTime = performance.now() - tsStartTime
@@ -776,7 +803,7 @@ export default class Processor {
          const line = renderlines[idx] as Base
          if (line.lineType === 'L' || line.lineType === 'T') {
             const l = line as Move
-            const lineData = l.renderLine(0.4, 0.2)
+            const lineData = l.renderLine(this.extrusionWidth(), 0.2, this.extrusionHeight(l.layerHeight))
             buildBuffers(lineData, l, segIdx)
             this.gCodeLines[line.lineNumber - 1] = new Move_Thin(this.processorProperties, line as Move) //remove unnecessary information now that we have the matrix
             segIdx++
@@ -785,7 +812,7 @@ export default class Processor {
             //run all the segments
             for (const seg in arc.segments) {
                const segment = arc.segments[seg] as Move
-               const lineData = segment.renderLine(0.38, 0.3)
+               const lineData = segment.renderLine(this.extrusionWidth() * 0.95, 0.3, this.extrusionHeight(segment.layerHeight))
                buildBuffers(lineData, arc, segIdx)
                segIdx++
             }
@@ -1048,6 +1075,102 @@ export default class Processor {
       mesh.thinInstanceCount = segmentCount
 
       console.log(`📊 Applied WASM buffers to ${mesh.name}: ${segmentCount} instances`)
+   }
+
+   // Every parse pass starts from a fresh ProcessorProperties, so the parse-time configuration is
+   // re-applied here rather than at each of the call sites
+   private buildProcessorProperties(file: string): ProcessorProperties {
+      const props = new ProcessorProperties()
+      props.slicer = slicerFactory(file)
+      props.cncMode = this.g1AsExtrusion
+      props.zBelt = this.zBelt
+      props.setGantryAngle(this.gantryAngle)
+      return props
+   }
+
+   // Re-applied after every load, so a user-set range is not clobbered by the parsed one
+   applyFeedRateRange() {
+      const min = this.userMinFeedRate ?? this.processorProperties.minFeedRate
+      const max = this.userMaxFeedRate ?? this.processorProperties.maxFeedRate
+      this.modelMaterial.forEach((m) => m.setMinFeedRate(min))
+      this.modelMaterial.forEach((m) => m.setMaxFeedRate(max))
+   }
+
+   // Null for either end restores the parsed value for that end
+   setFeedRateRange(min: number | null, max: number | null) {
+      this.userMinFeedRate = min
+      this.userMaxFeedRate = max
+      this.applyFeedRateRange()
+   }
+
+   // Absolute nozzle marker position, bypassing the file-position tracker entirely. Takes
+   // G-code coordinates and applies the Babylon axis swap
+   setNozzlePosition(x: number, y: number, z: number, animate: boolean) {
+      const nozzle = this.getNozzle()
+      if (!nozzle) {
+         return
+      }
+      const position = { x: x, y: z, z: y }
+      if (animate) {
+         nozzle.moveToPosition({ startPos: nozzle.getCurrentPosition(), endPos: position, feedRate: 1500, duration: 0, isExtruding: false })
+      } else {
+         nozzle.forcePosition(position)
+      }
+   }
+
+   // In high quality mode the geometry follows the machine: extrusion width from the tool
+   // diameter, height from the layer height measured while parsing
+   private extrusionWidth(): number {
+      return this.hqRendering ? this.getNozzleDiameter() : DEFAULT_NOZZLE_SIZE
+   }
+
+   // null for either value drops that step out of the resolution order
+   setNozzleDiameter(override: number | null, fallback: number | null) {
+      this.nozzleDiameterOverride = override
+      this.nozzleDiameterFallback = fallback
+   }
+
+   getNozzleDiameter(): number {
+      return this.nozzleDiameterOverride ?? this.parsedNozzleDiameter ?? this.nozzleDiameterFallback ?? DEFAULT_NOZZLE_SIZE
+   }
+
+   // Slicers spell it 'nozzle_diameter' or 'nozzle diameter' and may list one value per extruder.
+   // The PrusaSlicer family writes its config block at the END of the file, so both ends are
+   // searched rather than just the header
+   private findNozzleDiameter(file: string): number | null {
+      const pattern = /^;\s*(?:nozzle[_ ]diameter|nozzle[_ ]size)\s*[:=]\s*([\d.]+)/im
+      const chunks = file.length > 2 * HEADER_SCAN_BYTES
+         ? [file.substring(0, HEADER_SCAN_BYTES), file.substring(file.length - HEADER_SCAN_BYTES)]
+         : [file]
+      for (const chunk of chunks) {
+         const match = pattern.exec(chunk)
+         const value = match ? Number(match[1]) : NaN
+         if (value > 0 && value < 10) {
+            return value
+         }
+      }
+      return null
+   }
+
+   private extrusionHeight(measured: number): number {
+      return this.hqRendering ? measured : DEFAULT_LAYER_HEIGHT
+   }
+
+   setHQRendering(enabled: boolean) {
+      this.hqRendering = enabled
+   }
+
+   // Treat G1 without an E parameter as extruding, for CNC and laser files. Needs a reload
+   setG1AsExtrusion(enabled: boolean) {
+      this.g1AsExtrusion = enabled
+      this.wasmProcessor?.setG1AsExtrusion(enabled)
+   }
+
+   // Belt printer geometry, angle in degrees. Needs a reload
+   setZBelt(enabled: boolean, gantryAngle: number) {
+      this.zBelt = enabled
+      this.gantryAngle = gantryAngle
+      this.wasmProcessor?.setZBelt(enabled, gantryAngle)
    }
 
    // Toggles a shader uniform on the existing meshes - the geometry always carries every segment, so

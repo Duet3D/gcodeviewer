@@ -109,6 +109,8 @@ function parseG0G1Fast(props: ProcessorProperties, line: string): Base | null {
    move.feedRate = props.CurrentFeedRate
    if (move.extruding) {
       props.recordExtrusionFeedRate(move.feedRate)
+      props.recordLayerHeight(props.currentPosition.y)
+      move.layerHeight = props.currentLayerHeight
    }
    props.currentPosition.toArray(move.end)
 

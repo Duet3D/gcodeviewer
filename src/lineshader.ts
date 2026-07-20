@@ -40,6 +40,9 @@ export default class LineShaderMaterial {
    uniform vec4 progressColor;
    uniform bool showSupports;
    uniform bool showTravels;
+   uniform bool persistTravels;
+   uniform vec3 minFeedColor;
+   uniform vec3 maxFeedColor;
    uniform float utime;
    uniform int renderMode;
 
@@ -48,6 +51,10 @@ export default class LineShaderMaterial {
    uniform bool perimeterOnly;
 
    varying vec3 eye_normal;
+   varying vec3 eye_pos;
+
+#include<clipPlaneVertexDeclaration>
+
    flat out vec3 vDiffColor;
    flat out float fIsPerimeter;
    flat out float bDiscard;
@@ -84,8 +91,8 @@ export default class LineShaderMaterial {
                }
             break;
             case 2:
-               float m = (feedRate - minFeedRate) / (maxFeedRate - minFeedRate);
-               vDiffColor = mix(vec3(0,0,1), vec3(1,0,0), m); 
+               float m = (feedRate - minFeedRate) / max(maxFeedRate - minFeedRate, 0.0001);
+               vDiffColor = mix(minFeedColor, maxFeedColor, clamp(m, 0.0, 1.0));
                break;
             case 5:
                vDiffColor = pickColor.rgb;
@@ -102,13 +109,22 @@ export default class LineShaderMaterial {
          }
          else if (tool >= 254.0)  //Travel
          {
-            if(fShow >= 0.0 && fShow < animationLength / 8.0)
+            if(!showTravels)
+            {
+               bDiscard = 1.;
+            }
+            else if(fShow >= 0.0 && fShow < animationLength / 8.0)
             {
                   vDiffColor = mix(vec3(1.0, 0.0, 0.0), vec3(0.5,0.0,0.0), fShow / animationLength / 2.0);
             }
-            else if (showTravels && fShow >= 0.0)
+            else if (fShow >= 0.0)
             {
-               vDiffColor = vec3(0.3, 0.5, 0.8); // persistent travel lines
+               vDiffColor = vec3(0.3, 0.5, 0.8);
+               bDiscard = persistTravels ? 0. : 1.;
+            }
+            else if (alphaMode || progressMode)
+            {
+               vDiffColor = vec3(0.3, 0.5, 0.8);
             }
             else
             {
@@ -129,7 +145,7 @@ export default class LineShaderMaterial {
                   vDiffColor = mix(vec3(1, 1, 1) - vDiffColor.rgb, vDiffColor.rgb, fShow / animationLength);
                }
             }
-            else if (fShow >= 0.0 && progressMode) 
+            else if (fShow < 0.0 && progressMode)
             {
                vDiffColor = progressColor.rgb;
             }
@@ -140,9 +156,12 @@ export default class LineShaderMaterial {
          }
 
          //Final Results
-         gl_Position = viewProjection * finalWorld *  vec4(position, 1.0);
+         vec4 worldPos = finalWorld * vec4(position, 1.0);
+         #include<clipPlaneVertex>
+         gl_Position = viewProjection * worldPos;
          mat4 n =transpose(inverse(worldView * finalWorld));
-         eye_normal = (n * (vec4(normal , 1.0) * vec4(position,1.)) ).xyz;
+         eye_normal = (n * vec4(normal, 0.0)).xyz;
+         eye_pos = (worldView * finalWorld * vec4(position, 1.0)).xyz;
    }`
 
    static readonly fragmentShader = `
@@ -154,12 +173,18 @@ export default class LineShaderMaterial {
    
    // x = ambient, y = top diffuse, z = front diffuse, w = global
    const vec4 light_intensity = vec4(0.45, 0.7, 0.75, 0.75);
+   const float SPECULAR_POWER = 32.0;
+   const float SPECULAR_INTENSITY = 0.35;
    varying vec3 eye_normal;
+   varying vec3 eye_pos;
+
+#include<clipPlaneFragmentDeclaration>
 
    uniform bool lineMesh;
    uniform bool alphaMode;
    uniform bool progressMode;
    uniform float alphaValue;
+   uniform bool useSpecular;
 
    flat in vec3 vDiffColor;
    flat in float fIsPerimeter;
@@ -169,6 +194,7 @@ export default class LineShaderMaterial {
    const vec3 lowerBound = vec3(0.3,0.3,0.3);
 
    void main(){
+         #include<clipPlaneFragment>
 
          if( bDiscard > 0.0) {
             discard;
@@ -179,6 +205,10 @@ export default class LineShaderMaterial {
          if(focused > 0.) 
          {
             diffuseColor.a = 1.0;
+         }
+         else if(progressMode && fShow < 0.0)
+         {
+            diffuseColor.a = alphaValue;
          }
          else
          {
@@ -208,7 +238,13 @@ export default class LineShaderMaterial {
             float intensity = light_intensity.x + NdotL * light_intensity.y;
             NdotL = abs(dot(normal, LIGHT_FRONT_DIR));
             intensity += NdotL * light_intensity.z;
-            gl_FragColor = vec4(diffuseColor.rgb * light_intensity.w * intensity, diffuseColor.a);
+            vec3 shaded = diffuseColor.rgb * light_intensity.w * intensity;
+            if(useSpecular)
+            {
+               vec3 halfDir = normalize(LIGHT_TOP_DIR + normalize(-eye_pos));
+               shaded += vec3(pow(max(dot(normal, halfDir), 0.0), SPECULAR_POWER) * SPECULAR_INTENSITY);
+            }
+            gl_FragColor = vec4(shaded, diffuseColor.a);
          }
    }`
 
@@ -260,8 +296,15 @@ export default class LineShaderMaterial {
                'perimeterOnly',
                'showSupports',
                'showTravels',
+               'persistTravels',
+               'minFeedColor',
+               'maxFeedColor',
+               'useSpecular',
                'utime',
             ],
+            // Off by default in ShaderMaterial, and without it the Z clipping planes set on
+            // the scene never reach this material
+            useClipPlane: true,
          },
       )
 
@@ -273,6 +316,10 @@ export default class LineShaderMaterial {
       this.material.setVector4('progressColor', new Vector4(0, 1, 0, 1))
       this.material.setFloat('alphaValue', 0.05)
       this.material.setInt('showTravels', 0)
+      this.material.setInt('persistTravels', 0)
+      this.material.setInt('useSpecular', 0)
+      this.material.setVector3('minFeedColor', new Vector3(0, 0, 1))
+      this.material.setVector3('maxFeedColor', new Vector3(1, 0, 0))
       this.material.setInt('perimeterOnly', 0)
       this.material.setInt('lineMesh', 0)
 
@@ -336,6 +383,22 @@ export default class LineShaderMaterial {
 
    setShowTravels(show: boolean) {
       this.material.setInt('showTravels', show ? 1 : 0)
+   }
+
+   setPersistTravels(persist: boolean) {
+      this.material.setInt('persistTravels', persist ? 1 : 0)
+   }
+
+   setSpecular(enabled: boolean) {
+      this.material.setInt('useSpecular', enabled ? 1 : 0)
+   }
+
+   setMinFeedColor(color: number[]) {
+      this.material.setVector3('minFeedColor', new Vector3(color[0] / 255, color[1] / 255, color[2] / 255))
+   }
+
+   setMaxFeedColor(color: number[]) {
+      this.material.setVector3('maxFeedColor', new Vector3(color[0] / 255, color[1] / 255, color[2] / 255))
    }
 
    setPerimeterOnly(mode: boolean) {

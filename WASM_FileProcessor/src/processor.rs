@@ -37,7 +37,19 @@ impl FileProcessor {
             properties: ProcessorProperties::new(),
         }
     }
-    
+
+    /// Treat G1 without an E parameter as extruding, for CNC and laser files
+    pub fn set_cnc_mode(&mut self, enabled: bool) {
+        self.properties.cnc_mode = enabled;
+    }
+
+    /// Belt printer geometry. The angle is in degrees and is always applied so hyp/adj can never
+    /// keep their 0.0 defaults, which would collapse every Y coordinate to zero
+    pub fn set_z_belt(&mut self, enabled: bool, gantry_angle_degrees: f64) {
+        self.properties.z_belt = enabled;
+        self.properties.set_gantry_angle(gantry_angle_degrees);
+    }
+
     /// Process G-code file content.
     /// Returns (gcode_lines, position_tracker, render_segments): the tracker maps line file
     /// positions to their end state for animation, render_segments lists every renderable segment

@@ -168,6 +168,8 @@ pub fn parse_g0_g1_move(
     move_data.feed_rate = props.current_feed_rate;
     if move_data.extruding {
         props.record_extrusion_feed_rate(move_data.feed_rate);
+        props.record_layer_height(move_data.end.y);
+        move_data.layer_height = props.current_layer_height;
     }
     
     // Update height tracking

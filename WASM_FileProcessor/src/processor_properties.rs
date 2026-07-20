@@ -2,6 +2,9 @@ use crate::gcode_line::{Vector3, Color4};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Fallback extrusion height until two extruding layers have been seen
+pub const DEFAULT_LAYER_HEIGHT: f64 = 0.2;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ColorMode {
     Tool,
@@ -83,6 +86,7 @@ pub struct ProcessorProperties {
     // Layer tracking
     pub layer_dictionary: HashMap<u32, u32>, // Z-height hash -> line count
     pub previous_z: f64, // Last Z where extrusion occurred
+    pub current_layer_height: f64, // Measured from the Z delta between extruding layers
     
     // Tool management
     pub tools: Vec<Tool>,
@@ -168,6 +172,7 @@ impl ProcessorProperties {
             last_gcode_byte: 0,
             layer_dictionary: HashMap::new(),
             previous_z: 0.0,
+            current_layer_height: DEFAULT_LAYER_HEIGHT,
             tools: tools.clone(),
             current_tool: tools[0].clone(),
             current_position: Vector3::zero(),
@@ -263,6 +268,18 @@ impl ProcessorProperties {
         }
     }
     
+    // Layer height is the Z delta between consecutive extruding layers. Non-planar prints and
+    // Z hops would otherwise produce nonsense, so implausible deltas keep the previous value
+    pub fn record_layer_height(&mut self, z: f64) {
+        let delta = (z - self.previous_z).abs();
+        if delta > 0.001 {
+            if delta < 5.0 {
+                self.current_layer_height = delta;
+            }
+            self.previous_z = z;
+        }
+    }
+    
     // Update height tracking
     pub fn update_height(&mut self, z: f64) {
         if z > self.max_height {
@@ -313,6 +330,7 @@ impl ProcessorProperties {
         self.current_e = 0.0;
         self.total_extrusion = 0.0;
         self.previous_z = 0.0;
+        self.current_layer_height = DEFAULT_LAYER_HEIGHT;
         self.total_rendered_segments = 0;
         self.max_height = 0.0;
         self.min_height = 0.0;
