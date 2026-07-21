@@ -39,6 +39,7 @@ export default class Bed {
    private scene: Scene
    private bedMesh: Mesh = null
    private bedLineColor = '#0000FF'
+   private gridMajorSpacing: number | null = null
    private planeMaterial: GridMaterial
    private boxMaterial: StandardMaterial
    private highlightLayer: HighlightLayer = null
@@ -128,7 +129,7 @@ export default class Bed {
          }, this.scene)
          this.bedMesh.position.x = bedCenter.x
          this.bedMesh.position.y = bedCenter.z
-         this.bedMesh.position.z = bedCenter.x
+         this.bedMesh.position.z = bedCenter.y
          this.bedMesh.isPickable = false
          this.bedMesh.enableEdgesRendering(undefined, true)
 
@@ -155,9 +156,9 @@ export default class Bed {
             depth: bedSize.y,
             height: bedSize.z
          }, this.scene)
-         this.bedMesh.position.x = bedCenter.x - this.buildVolume.x.min
-         this.bedMesh.position.y = bedCenter.z - this.buildVolume.z.min
-         this.bedMesh.position.z = bedCenter.y - this.buildVolume.y.min
+         this.bedMesh.position.x = bedCenter.x
+         this.bedMesh.position.y = bedCenter.z
+         this.bedMesh.position.z = bedCenter.y
          this.bedMesh.enableEdgesRendering()
          this.bedMesh.edgesWidth = 100
          this.bedMesh.material = this.boxMaterial
@@ -175,23 +176,44 @@ export default class Bed {
    }
 
    commitBedSize(): void {
+      // The grid offset is derived from the bed centre, which this may have just moved
+      this.rebuildGridMaterial()
       this.setRenderMode(this.renderMode)
+   }
+
+   private rebuildGridMaterial(): void {
+      this.planeMaterial.dispose()
+      this.planeMaterial = this.buildGridMaterial()
    }
 
    buildGridMaterial(): GridMaterial {
       const gridMaterial = new GridMaterial('bedMaterial', this.scene)
       gridMaterial.mainColor = new Color3(0, 0, 0)
       gridMaterial.lineColor = Color3.FromHexString(this.getBedColor())
-      gridMaterial.gridRatio = 5
+      gridMaterial.gridRatio = (this.gridMajorSpacing ?? 50) / 10
       gridMaterial.opacity = 0.8
       gridMaterial.majorUnitFrequency = 10
       gridMaterial.minorUnitVisibility = 0.6
-      gridMaterial.gridOffset = new Vector3(0, 0, 0)
+      // gridOffset shifts the mesh-local position, which is centred on the bed rather than G-code zero
+      const center = this.getCenter()
+      gridMaterial.gridOffset = this.gridMajorSpacing !== null ? new Vector3(center.x, center.y, 0) : new Vector3(0, 0, 0)
+      // CreatePlane is single-sided, so the grid disappears when the camera looks up from below
+      gridMaterial.backFaceCulling = false
       return gridMaterial
    }
 
    getBedColor(): string {
       return this.bedLineColor
+   }
+
+   setGridMajorSpacing(spacing: number | null): void {
+      if (spacing === this.gridMajorSpacing) {
+         return
+      }
+      this.gridMajorSpacing = spacing
+      this.rebuildGridMaterial()
+      this.dispose()
+      this.buildBed()
    }
 
    setBedColor(color: string): void {
@@ -213,7 +235,8 @@ export default class Bed {
 
    dispose(): void {
       if (this.bedMesh) {
-         this.bedMesh.dispose(false, true)
+         // planeMaterial and boxMaterial outlive the mesh and are reused by the next buildBed()
+         this.bedMesh.dispose(false, false)
          this.bedMesh = null
       }
       if (this.highlightLayer) {

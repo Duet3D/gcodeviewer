@@ -351,7 +351,7 @@ impl ProcessorProperties {
         self.slicer_name = "Unknown".to_string();
         self.slicer_version = "Unknown".to_string();
         self.current_feature_color = Color4::white();
-        self.current_is_perimeter = false;
+        self.current_is_perimeter = true;
         self.current_is_support = false;
 
         // Drop tools auto-created by previous files and reset to the default tool

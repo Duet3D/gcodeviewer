@@ -3,6 +3,8 @@ pub mod PrusaSlicer;
 pub mod CuraSlicer;
 pub mod OrcaSlicer;
 pub mod SuperSlicer;
+pub mod IdeaMakerSlicer;
+pub mod KiriMotoSlicer;
 pub mod GenericSlicer;
 
 pub use slicer_base::*;

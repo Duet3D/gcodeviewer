@@ -6,7 +6,7 @@ use crate::utils::{parse_number_fast, skip_whitespace};
 /// G28: Home all axes, or specific axes if parameters provided
 /// Format: G28 [X] [Y] [Z] [E]
 pub fn parse_g28_home(
-    properties: &mut ProcessorProperties,
+    _properties: &mut ProcessorProperties,
     line: &str,
     file_position: u32,
     line_number: u32,
@@ -20,10 +20,6 @@ pub fn parse_g28_home(
         pos += 1;
     }
     
-    let mut home_x = false;
-    let mut home_y = false;
-    let mut home_z = false;
-    let mut home_e = false;
     let mut parameters = Vec::new();
     
     // If no parameters specified, home all axes
@@ -43,19 +39,15 @@ pub fn parse_g28_home(
         
         match param_char {
             'X' | 'x' => {
-                home_x = true;
                 parameters.push(("X".to_string(), 0.0));
             }
             'Y' | 'y' => {
-                home_y = true;
                 parameters.push(("Y".to_string(), 0.0));
             }
             'Z' | 'z' => {
-                home_z = true;
                 parameters.push(("Z".to_string(), 0.0));
             }
             'E' | 'e' => {
-                home_e = true;
                 parameters.push(("E".to_string(), 0.0));
             }
             ';' => break, // Comment start
@@ -70,29 +62,14 @@ pub fn parse_g28_home(
     
     // If no specific axes mentioned, home all axes
     if !has_parameters {
-        home_x = true;
-        home_y = true;  
-        home_z = true;
-        home_e = true;
         parameters.push(("X".to_string(), 0.0));
         parameters.push(("Y".to_string(), 0.0));
         parameters.push(("Z".to_string(), 0.0));
         parameters.push(("E".to_string(), 0.0));
     }
     
-    // Update processor state - homing resets positions to 0
-    if home_x {
-        properties.current_position.x = 0.0;
-    }
-    if home_y {
-        properties.current_position.y = 0.0;
-    }
-    if home_z {
-        properties.current_position.z = 0.0;
-    }
-    if home_e {
-        properties.current_e = 0.0;
-    }
+    // Position is deliberately left alone, matching the TS parser: an axis homes to its min or
+    // max endstop, which is only 0 by coincidence and never in workplace-offset terms
     
     // Create command data
     let mut cmd_data = CommandData::new(file_position, line_number, line.to_string(), "G28".to_string());
@@ -119,36 +96,34 @@ mod tests {
     use super::*;
     
     #[test]
-    fn test_parse_g28_home_all() {
+    fn test_parse_g28_home_all_leaves_position_alone() {
         let mut props = ProcessorProperties::new();
         props.current_position.x = 100.0;
         props.current_position.y = 50.0;
         props.current_position.z = 10.0;
         props.current_e = 5.0;
-        
+
         let result = parse_g28_home(&mut props, "G28", 100, 1);
         assert!(result.is_ok());
-        
-        // All positions should be reset to 0
-        assert_eq!(props.current_position.x, 0.0);
-        assert_eq!(props.current_position.y, 0.0);
-        assert_eq!(props.current_position.z, 0.0);
-        assert_eq!(props.current_e, 0.0);
+
+        assert_eq!(props.current_position.x, 100.0);
+        assert_eq!(props.current_position.y, 50.0);
+        assert_eq!(props.current_position.z, 10.0);
+        assert_eq!(props.current_e, 5.0);
     }
-    
+
     #[test]
-    fn test_parse_g28_home_specific() {
+    fn test_parse_g28_home_specific_leaves_position_alone() {
         let mut props = ProcessorProperties::new();
         props.current_position.x = 100.0;
         props.current_position.y = 50.0;
         props.current_position.z = 10.0;
-        
+
         let result = parse_g28_home(&mut props, "G28 X Z", 200, 2);
         assert!(result.is_ok());
-        
-        // Only X and Z should be homed
-        assert_eq!(props.current_position.x, 0.0);
-        assert_eq!(props.current_position.y, 50.0); // Unchanged
-        assert_eq!(props.current_position.z, 0.0);
+
+        assert_eq!(props.current_position.x, 100.0);
+        assert_eq!(props.current_position.y, 50.0);
+        assert_eq!(props.current_position.z, 10.0);
     }
 }

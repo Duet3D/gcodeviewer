@@ -15,22 +15,24 @@ export default function (props: Props, line: string): Base {
    let forceAbsolute = false
    const unit = props.unitMultiplier
 
+   // The G token is applied up front because zBelt reverses the parameter order below, which would
+   // otherwise run the G case last and let its extruding default overwrite what the E token decided
+   for (const token of tokens) {
+      const upperToken = token.trim().toUpperCase()
+      if (upperToken == 'G53') forceAbsolute = true
+      if (upperToken == 'G1' || upperToken == 'G01') {
+         props.currentTool.color.toArray(move.color)
+         move.extruding = props.cncMode
+      }
+   }
+
+   // zBelt derives Z from currentZ and Y from the updated currentZ, so Z has to be applied first
    if (props.zBelt) tokens.reverse()
 
    for (let idx = 0; idx < tokens.length; idx++) {
       const token = tokens[idx]
       const firstChar = token[0].toUpperCase()
       switch (firstChar) {
-         case 'G': {
-            const upperToken = token.toUpperCase()
-            if (upperToken == 'G53') forceAbsolute = true
-            if (upperToken == 'G1' || upperToken == 'G01') {
-               //move.extruding = true
-               props.currentTool.color.toArray(move.color)
-               move.extruding = props.cncMode
-            }
-            break
-         }
          case 'X':
             if (props.zBelt) {
                props.currentPosition.x = Number(token.substring(1)) * unit

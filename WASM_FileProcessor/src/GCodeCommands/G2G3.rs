@@ -1,6 +1,6 @@
 use crate::gcode_line::{GCodeLine, ArcMove, Vector3};
 use crate::processor_properties::ProcessorProperties;
-use crate::utils::{parse_number_fast, skip_whitespace, tessellate_arc, ArcPlane};
+use crate::utils::{parse_number_fast, skip_whitespace};
 
 /// Parse G2 (clockwise arc) and G3 (counter-clockwise arc) commands
 /// Format: G2/G3 Xnnn Ynnn Znnn Innn Jnnn Knnn Ennn Fnnn

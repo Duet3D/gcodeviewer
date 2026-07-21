@@ -11,8 +11,9 @@ const fastGCodeRegex = /^([GMT])(\d{1,3})/i
 // Ultra-fast parser for the most common G0/G1 patterns
 function parseG0G1Fast(props: ProcessorProperties, line: string): Base | null {
    // Pattern: G0/G1 X123.45 Y67.89 Z1.23 E4.56 F1500
-   // Skip if line has special characters that need complex parsing
-   if (line.includes(';') || line.includes('G53') || line.includes('(')) return null
+   // Skip if line has special characters that need complex parsing. zBelt has to fall through too:
+   // this path applies the plain axis mapping, so a belt file would render with unskewed geometry
+   if (props.zBelt || line.includes(';') || line.includes('G53') || line.includes('(')) return null
    
    let x: number | null = null
    let y: number | null = null  

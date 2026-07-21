@@ -88,10 +88,10 @@ self.addEventListener('message', async (message) => {
          self.viewer.processor.updateByLineNumber(message.data.lineNumber)
          break
       case 'setalphamode':
-         self.viewer.processor.modelMaterial.forEach((m) => m.setAlphaMode(message.data.mode))
+         self.viewer.setAlphaMode(message.data.mode)
          break
       case 'setprogressmode':
-         self.viewer.processor.modelMaterial.forEach((m) => m.setProgressMode(message.data.mode))
+         self.viewer.setProgressMode(message.data.mode)
          break
       case 'setmeshmode':
          self.viewer.processor.setMeshMode(message.data.mode)
@@ -133,13 +133,13 @@ self.addEventListener('message', async (message) => {
          self.viewer.setCameraDirection(message.data.direction)
          break
       case 'frameToPrint':
-         self.viewer.frameToPrint()
+         self.viewer.frameToPrint(message.data.animate)
          break
       case 'requestPrintBounds':
          self.viewer.postPrintBounds()
          break
       case 'resetCamera':
-         self.viewer.resetCamera()
+         self.viewer.resetCamera(message.data.animate)
          break
       case 'setBackgroundColor':
          self.viewer.setBackgroundColor(message.data.color)
@@ -209,6 +209,12 @@ self.addEventListener('message', async (message) => {
          break
       case 'showAxes':
          self.viewer.showAxes(message.data.visible)
+         break
+      case 'showRuler':
+         self.viewer.showRuler(message.data.visible)
+         break
+      case 'setRulerInterval':
+         self.viewer.setRulerInterval(message.data.interval)
          break
       case 'showWorkplace':
          self.viewer.showWorkplace(message.data.visible)

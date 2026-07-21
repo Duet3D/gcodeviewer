@@ -35,6 +35,9 @@ export default class Processor {
    // loaded are harmless no-ops rather than dereferencing undefined
    modelMaterial: LineShaderMaterial[] = []
    filePosition: number = 0
+   // How much of the file is drawn as printed. Not the same as filePosition: a fresh load renders the
+   // whole file while the playback position stays at the start, so animation begins from the beginning
+   renderedFilePosition = 0
    focusedColorId = 0
    // Hover highlighting is the affordance for click-to-seek, so it follows the same flag
    allowSeek = true
@@ -169,6 +172,7 @@ export default class Processor {
       this.positionTracker.clear()
       this.sortedPositions = []
       this.filePosition = 0
+      this.renderedFilePosition = 0
       this.originalFile = undefined
 
       // Note: Don't dispose WASM processor here - it should persist across file loads
@@ -317,6 +321,7 @@ export default class Processor {
       this.modelMaterial.forEach((m) => m.setPerimeterOnly(this.perimeterOnly))
 
       const lastPosition = this.gCodeLines[this.gCodeLines.length - 1].filePosition
+      this.renderedFilePosition = lastPosition
       this.modelMaterial.forEach((m) => m.updateCurrentFilePosition(lastPosition)) //Set it to the end
       this.gpuPicker.updateCurrentPosition(lastPosition)
 
@@ -890,6 +895,7 @@ export default class Processor {
 
    updateFilePosition(position: number, animate: boolean = false) {
       this.filePosition = position // Store the current position
+      this.renderedFilePosition = position
       this.modelMaterial.forEach((m) => m.updateCurrentFilePosition(position)) //Set it to the end
       this.gpuPicker.updateCurrentPosition(position)
 
@@ -968,6 +974,30 @@ export default class Processor {
             await this.nozzle.moveToPosition(movement)
          }
       }
+   }
+
+   // World-space bounding box of the extruding moves, ignoring travels so a Z hop or a purge line
+   // off to the side cannot inflate it. `upToFilePosition` limits it to what has printed so far.
+   // Null before anything extruding has been parsed
+   getExtrusionBounds(upToFilePosition?: number): { min: Vector3; max: Vector3 } | null {
+      let minX = Infinity, minY = Infinity, minZ = Infinity
+      let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity
+      for (const filePosition of this.sortedPositions) {
+         if (upToFilePosition !== undefined && filePosition > upToFilePosition) {
+            break
+         }
+         const position = this.positionTracker.get(filePosition)
+         if (!position || !position.extruding) {
+            continue
+         }
+         minX = Math.min(minX, position.x)
+         maxX = Math.max(maxX, position.x)
+         minY = Math.min(minY, position.y)
+         maxY = Math.max(maxY, position.y)
+         minZ = Math.min(minZ, position.z)
+         maxZ = Math.max(maxZ, position.z)
+      }
+      return Number.isFinite(minX) ? { min: new Vector3(minX, minY, minZ), max: new Vector3(maxX, maxY, maxZ) } : null
    }
 
    updateByLineNumber(lineNumber: number) {
@@ -1284,12 +1314,16 @@ export default class Processor {
       }
 
       const currentIndex = this.getCurrentAnimationIndex()
-      const nextIndex = currentIndex + 1
-
-      if (nextIndex >= this.sortedPositions.length) {
+      if (currentIndex + 1 >= this.sortedPositions.length) {
          this.stopNozzleAnimation()
          return
       }
+
+      // The 10 ms floor between moves caps throughput at ~100 moves/s however high the speed is set,
+      // so past 10x whole batches are skipped over: only the last move of a batch gets tweened and
+      // reported, the ones in between are simply not drawn
+      const batchSize = Math.min(Math.ceil(this.nozzle.getAnimationSpeed() / 10), 500)
+      const nextIndex = Math.min(currentIndex + batchSize, this.sortedPositions.length - 1)
 
       const nextFilePosition = this.sortedPositions[nextIndex]
       const positionData = this.positionTracker.get(nextFilePosition)
@@ -1297,6 +1331,7 @@ export default class Processor {
       if (positionData) {
          // Update file position to match animation progress - but don't trigger position change events
          this.filePosition = nextFilePosition
+         this.renderedFilePosition = nextFilePosition
          this.modelMaterial.forEach((m) => m.updateCurrentFilePosition(nextFilePosition))
          this.gpuPicker.updateCurrentPosition(nextFilePosition)
 

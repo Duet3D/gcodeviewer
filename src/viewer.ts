@@ -4,7 +4,7 @@ import { Color4, Color3 } from '@babylonjs/core/Maths/math.color'
 import { ArcRotateCamera } from '@babylonjs/core/Cameras/arcRotateCamera'
 import { ArcRotateCameraKeyboardMoveInput } from '@babylonjs/core/Cameras/Inputs/arcRotateCameraKeyboardMoveInput'
 import { Light } from '@babylonjs/core/Lights/light'
-import { Vector3 } from '@babylonjs/core/Maths/math.vector'
+import { Vector3, Vector4 } from '@babylonjs/core/Maths/math.vector'
 import { Mesh } from '@babylonjs/core/Meshes/mesh'
 import { PointLight } from '@babylonjs/core/Lights/pointLight'
 import { FlyCamera } from '@babylonjs/core/Cameras/flyCamera'
@@ -15,10 +15,15 @@ import '@babylonjs/core/Meshes/thinInstanceMesh'
 import '@babylonjs/core/Engines/Extensions/engine.query'
 import GPUPicker from './gpupicker'
 import { PointerEventTypes } from '@babylonjs/core/Events/pointerEvents'
+import { Animation } from '@babylonjs/core/Animations/animation'
+import { CubicEase, EasingFunction } from '@babylonjs/core/Animations/easing'
+// Scene.beginDirectAnimation, which CreateAndStartAnimation needs, is only patched in by this import
+import '@babylonjs/core/Animations/animatable'
 import { Plane } from '@babylonjs/core/Maths/math.plane'
 import ViewBox, { ViewBoxDirection } from './Renderables/viewbox'
 import Bed, { BuildVolume, RenderBedMode } from './Renderables/bed'
 import Axes from './Renderables/axes'
+import Ruler from './Renderables/ruler'
 import Workplace from './Renderables/workplace'
 import BuildObjects from './Renderables/buildobjects'
 import '@babylonjs/core/Rendering/'
@@ -44,6 +49,7 @@ export default class Viewer {
    viewBox: ViewBox | null = null
    bed: Bed | null = null
    axes: Axes | null = null
+   ruler: Ruler | null = null
    workplace: Workplace | null = null
    buildObjects: BuildObjects | null = null
    zTopClipValue: number | null = null
@@ -51,7 +57,13 @@ export default class Viewer {
    // When false, clicking a rendered line no longer seeks the file position. The live job view turns
    // this off so the print head can't be scrubbed away from where the printer actually is
    allowSeek: boolean = true
+   // Mirrored from the render materials: with both off, not-yet-printed geometry is discarded, so
+   // the camera framing has to stop at the current file position instead of the whole file
+   private alphaMode = false
+   private progressMode = false
    offscreen: boolean = true
+   // Animation runs at a nominal 60 fps, so this is a half-second transition
+   private static readonly CAMERA_TRANSITION_FRAMES = 30
    lastFrameUpdate: number = 0
    renderTimeout: number = 1000
    maxFrameRate = 1000 / 30
@@ -197,6 +209,13 @@ export default class Viewer {
       }
       this.axes.render()
 
+      this.ruler = new Ruler(this.scene)
+      this.ruler.registerClipIgnore = (mesh) => {
+         this.registerClipIgnore(mesh)
+      }
+      this.ruler.color = this.bed.getBedColor()
+      this.ruler.build(this.bed.buildVolume)
+
       this.workplace = new Workplace(this.scene)
       this.workplace.registerClipIgnore = (mesh) => {
          this.registerClipIgnore(mesh)
@@ -257,7 +276,7 @@ export default class Viewer {
                // Middle-click on the cube returns to the default framing; left-click snaps to the
                // clicked face/edge/corner
                if ((pointerInfo.event as any)?.button === 1) {
-                  this.resetCamera()
+                  this.resetCamera(true)
                } else {
                   this.setCameraDirection(direction)
                }
@@ -271,6 +290,13 @@ export default class Viewer {
                }
             } catch {}
          }
+         if (pointerInfo.type == PointerEventTypes.POINTERMOVE) {
+            this.viewBox?.updateHover(this.scene.pointerX, this.scene.pointerY)
+         }
+         if (pointerInfo.type == PointerEventTypes.POINTERDOWN) {
+            // Grabbing the camera mid-transition would otherwise fight the animation for every frame
+            this.stopCameraAnimation()
+         }
       })
 
       //this.loadInstrumentation()
@@ -281,7 +307,34 @@ export default class Viewer {
       this.worker.postMessage({ type: 'ready' })
    }
 
-   // Snap the orbit camera so it views the bed from the given direction (viewbox face/edge/corner metadata)
+   // Assigning target normally rebuilds alpha/beta/radius from the camera position, which would undo
+   // the angle animations on every frame, so the override stays on for as long as one is running
+   private stopCameraAnimation() {
+      if (this.orbitCamera) {
+         this.scene?.stopAnimation(this.orbitCamera)
+         this.orbitCamera.overrideCloneAlphaBetaRadius = null
+      }
+   }
+
+   // Orbits to the new framing rather than cutting to it, so it stays readable which way the model turned
+   private animateCameraTo(alpha: number, beta: number, radius: number, target: Vector3) {
+      if (!this.orbitCamera || !this.scene) {
+         return
+      }
+      // Unwrap onto the camera's current revolution, otherwise crossing the +/-PI seam goes the long way round
+      const shortestAlpha = alpha + Math.round((this.orbitCamera.alpha - alpha) / (2 * Math.PI)) * 2 * Math.PI
+
+      const ease = new CubicEase()
+      ease.setEasingMode(EasingFunction.EASINGMODE_EASEINOUT)
+      this.stopCameraAnimation()
+      this.orbitCamera.overrideCloneAlphaBetaRadius = true
+      Animation.CreateAndStartAnimation('cameraAlpha', this.orbitCamera, 'alpha', 60, Viewer.CAMERA_TRANSITION_FRAMES, this.orbitCamera.alpha, shortestAlpha, Animation.ANIMATIONLOOPMODE_CONSTANT, ease)
+      Animation.CreateAndStartAnimation('cameraBeta', this.orbitCamera, 'beta', 60, Viewer.CAMERA_TRANSITION_FRAMES, this.orbitCamera.beta, beta, Animation.ANIMATIONLOOPMODE_CONSTANT, ease)
+      Animation.CreateAndStartAnimation('cameraRadius', this.orbitCamera, 'radius', 60, Viewer.CAMERA_TRANSITION_FRAMES, this.orbitCamera.radius, radius, Animation.ANIMATIONLOOPMODE_CONSTANT, ease)
+      Animation.CreateAndStartAnimation('cameraTarget', this.orbitCamera, 'target', 60, Viewer.CAMERA_TRANSITION_FRAMES, this.orbitCamera.target.clone(), target, Animation.ANIMATIONLOOPMODE_CONSTANT, ease, () => this.stopCameraAnimation())
+   }
+
+   // Move the orbit camera so it views the bed from the given direction (viewbox face/edge/corner metadata)
    setCameraDirection(direction: ViewBoxDirection) {
       if (!this.orbitCamera || !this.bed) {
          return
@@ -297,36 +350,177 @@ export default class Viewer {
       const zeroAxes = (direction.x === 0 ? 1 : 0) + (direction.y === 0 ? 1 : 0) + (direction.z === 0 ? 1 : 0)
       const distance = Math.max(bedSize.x, bedSize.y, bedSize.z) * (zeroAxes === 2 ? 1.75 : 1.35)
       const target = new Vector3(bedCenter.x, bedCenter.z, bedCenter.y)
+
+      // Let the camera resolve the spherical coordinates for the requested position, then rewind it
+      // and animate there - deriving alpha/beta by hand would duplicate what setPosition already does
+      const fromAlpha = this.orbitCamera.alpha, fromBeta = this.orbitCamera.beta, fromRadius = this.orbitCamera.radius
+      const fromTarget = this.orbitCamera.target.clone()
       this.orbitCamera.setTarget(target)
       this.orbitCamera.setPosition(target.subtract(look.scale(distance)))
       if (direction.x === 0 && direction.z === 0) {
          this.orbitCamera.alpha = (3 * Math.PI) / 2
       }
-      this.scene?.render(true)
+      const toAlpha = this.orbitCamera.alpha, toBeta = this.orbitCamera.beta, toRadius = this.orbitCamera.radius
+      // Target first: setTarget rebuilds the angles from the position, so it has to run before they are restored
+      this.orbitCamera.setTarget(fromTarget)
+      this.orbitCamera.alpha = fromAlpha
+      this.orbitCamera.beta = fromBeta
+      this.orbitCamera.radius = fromRadius
+
+      this.animateCameraTo(toAlpha, toBeta, toRadius, target)
    }
 
-   resetCamera() {
+   // Default framing: the whole bed plus whatever is loaded on it, so nothing sticks out of frame
+   resetCamera(animate = false) {
       if (!this.orbitCamera || !this.bed) {
          return
       }
-      const bedCenter = this.bed.getCenter()
-      const bedSize = this.bed.getSize()
-      // Front view tilted 45 deg down: alpha -PI/2 faces the front edge, beta PI/4 is the tilt.
-      // Babylon space maps G-code X -> x, height -> y (up), G-code Y -> z, so the bed centre's y
-      // (G-code Y) becomes the Babylon z target
-      const footprint = Math.max(bedSize.x, bedSize.y, 1)
-      // Aim below the plate so the bed rides in the upper-middle of the frame, leaving room at the
-      // bottom for the playback controls (the historical DWC framing)
-      this.orbitCamera.setTarget(new Vector3(bedCenter.x, -footprint * 0.12, bedCenter.y))
-      this.orbitCamera.alpha = -Math.PI / 2
-      this.orbitCamera.beta = Math.PI / 4
-      // Pull back far enough to frame the whole bed footprint (bedSize.x/y are the G-code X/Y spans)
-      this.orbitCamera.radius = footprint * (this.bed.isDelta ? 1.1 : 1.2)
+      this.frameCorners(this.bedCorners().concat(this.printCorners()), animate)
+   }
+
+   // Framed to the printed geometry rather than the whole bed (used by the embedded job view); falls
+   // back to bed framing when nothing is loaded yet
+   frameToPrint(animate = false) {
+      const corners = this.printCorners()
+      if (corners.length === 0) {
+         this.resetCamera(animate)
+         return
+      }
+      this.frameCorners(corners, animate)
+   }
+
+   // Bed footprint corners on the plate, in Babylon space (x = G-code X, y = height, z = G-code Y)
+   private bedCorners(): Vector3[] {
+      if (!this.bed) {
+         return []
+      }
+      const center = this.bed.getCenter()
+      const size = this.bed.getSize()
+      const hx = size.x / 2, hy = size.y / 2
+      return [
+         new Vector3(center.x - hx, 0, center.y - hy), new Vector3(center.x + hx, 0, center.y - hy),
+         new Vector3(center.x - hx, 0, center.y + hy), new Vector3(center.x + hx, 0, center.y + hy),
+      ]
+   }
+
+   // The eight corners of the loaded print's bounding box, empty when nothing extruding has been
+   // parsed. With unprinted geometry hidden only what has printed so far is on screen, so that is
+   // all the framing may count
+   private printCorners(): Vector3[] {
+      const bounds = this.processor.getExtrusionBounds(this.alphaMode || this.progressMode ? undefined : this.processor.renderedFilePosition)
+      if (!bounds) {
+         return []
+      }
+      const lo = bounds.min, hi = bounds.max
+      return [
+         new Vector3(lo.x, lo.y, lo.z), new Vector3(hi.x, lo.y, lo.z), new Vector3(lo.x, lo.y, hi.z), new Vector3(hi.x, lo.y, hi.z),
+         new Vector3(lo.x, hi.y, lo.z), new Vector3(hi.x, hi.y, lo.z), new Vector3(lo.x, hi.y, hi.z), new Vector3(hi.x, hi.y, hi.z),
+      ]
+   }
+
+   // Front view tilted 45 deg down (alpha -PI/2 faces the front edge, beta PI/4 is the tilt), pulled
+   // back until the given world-space corners fit the viewport
+   private frameCorners(corners: Vector3[], animate: boolean) {
+      const camera = this.orbitCamera
+      if (!camera || !this.engine || corners.length === 0) {
+         return
+      }
+      let min = corners[0], max = corners[0]
+      for (const corner of corners) {
+         min = Vector3.Minimize(min, corner)
+         max = Vector3.Maximize(max, corner)
+      }
+      const fromAlpha = camera.alpha, fromBeta = camera.beta, fromRadius = camera.radius
+      const fromTarget = camera.target.clone()
+
+      this.stopCameraAnimation()
+      camera.target = min.add(max).scale(0.5)
+      camera.alpha = -Math.PI / 2
+      camera.beta = Math.PI / 4
+      // Start far enough back that every corner is in front of the camera on the first fitting pass
+      camera.radius = 2 * Math.max(max.x - min.x, max.y - min.y, max.z - min.z, 1)
+      // Before the canvas has a real size the projection matrix is degenerate; that rough radius has
+      // to do until the next call, after layout or a file load, can fit properly
+      if (this.engine.getRenderWidth() >= 1 && this.engine.getRenderHeight() >= 1) {
+         this.fitRadius(camera, corners)
+         this.centerVertically(camera, corners)
+      }
+
+      if (animate) {
+         const toRadius = camera.radius, toTarget = camera.target.clone()
+         camera.target = fromTarget
+         camera.alpha = fromAlpha
+         camera.beta = fromBeta
+         camera.radius = fromRadius
+         this.animateCameraTo(-Math.PI / 2, Math.PI / 4, toRadius, toTarget)
+         return
+      }
       this.scene?.render(true)
    }
 
-   // World-space bounding box of the loaded print, unioned across the rendered meshes' thin instances.
-   // Null when nothing is loaded, so callers fall back to bed framing
+   // Corner extents in normalized device coordinates, where the visible range is [-1, 1] on each
+   // axis. Null when a corner sits behind the camera, which projection would flip across the frame
+   private projectCorners(camera: ArcRotateCamera, corners: Vector3[]): { minX: number; maxX: number; minY: number; maxY: number } | null {
+      const transform = camera.getViewMatrix(true).multiply(camera.getProjectionMatrix(true))
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+      for (const corner of corners) {
+         const clip = Vector4.TransformCoordinates(corner, transform)
+         if (clip.w <= 0) {
+            return null
+         }
+         minX = Math.min(minX, clip.x / clip.w)
+         maxX = Math.max(maxX, clip.x / clip.w)
+         minY = Math.min(minY, clip.y / clip.w)
+         maxY = Math.max(maxY, clip.y / clip.w)
+      }
+      return { minX, maxX, minY, maxY }
+   }
+
+   // Rescale the orbit radius by however much of the clip volume the corners span, so the fit follows
+   // the box size, the camera tilt and the viewport aspect ratio. Perspective makes a single pass
+   // approximate, hence the converging loop
+   private fitRadius(camera: ArcRotateCamera, corners: Vector3[]) {
+      for (let pass = 0; pass < 8; pass++) {
+         const ndc = this.projectCorners(camera, corners)
+         if (!ndc) {
+            camera.radius *= 2
+            continue
+         }
+         // Fill 95% of the viewport width or 74% of its height, whichever binds first - the rest
+         // stays as breathing room, the taller share of it below for the playback controls
+         const fill = Math.max((ndc.maxX - ndc.minX) / 2 / 0.95, (ndc.maxY - ndc.minY) / 2 / 0.74)
+         if (fill <= 0) {
+            break
+         }
+         const radius = camera.radius * fill
+         const converged = Math.abs(radius - camera.radius) < camera.radius * 0.01
+         camera.radius = radius
+         if (converged) {
+            break
+         }
+      }
+   }
+
+   // Centre the corners between the top of the playback controls and the top of the viewport, whose
+   // midpoint is clip space y +0.1. Perspective skews the projected box, so the look-at point is
+   // nudged until the centre lands; damped empirical steps converge without knowing the FOV
+   private centerVertically(camera: ArcRotateCamera, corners: Vector3[]) {
+      for (let pass = 0; pass < 6; pass++) {
+         const ndc = this.projectCorners(camera, corners)
+         if (!ndc) {
+            break
+         }
+         const delta = 0.1 - (ndc.minY + ndc.maxY) / 2
+         if (Math.abs(delta) < 0.01) {
+            break
+         }
+         // Lowering the target lifts the scene; ~0.6 radius per NDC unit lands close and the loop mops up the rest
+         camera.target = new Vector3(camera.target.x, camera.target.y - delta * 0.6 * camera.radius, camera.target.z)
+      }
+   }
+
+   // World-space bounding box of the rendered geometry, unioned across the meshes' thin instances.
+   // Covers travels and the full extrusion width, which the clip planes have to clear
    private getPrintBoundingBox(): { min: Vector3; max: Vector3 } | null {
       const meshes = this.processor?.meshes
       if (!meshes || meshes.length === 0) {
@@ -344,24 +538,6 @@ export default class Viewer {
          max = max ? Vector3.Maximize(max, box.maximumWorld) : box.maximumWorld.clone()
       }
       return min && max ? { min, max } : null
-   }
-
-   // Front view tilted 45 deg down, framed to the printed geometry rather than the whole bed (used by
-   // the embedded job view); falls back to bed framing when nothing is loaded yet
-   frameToPrint() {
-      const bounds = this.getPrintBoundingBox()
-      if (!bounds || !this.orbitCamera) {
-         this.resetCamera()
-         return
-      }
-      const center = bounds.min.add(bounds.max).scale(0.5)
-      const size = bounds.max.subtract(bounds.min)
-      const span = Math.max(size.x, size.y, size.z, 1)
-      this.orbitCamera.setTarget(new Vector3(center.x, center.y - span * 0.12, center.z))
-      this.orbitCamera.alpha = -Math.PI / 2
-      this.orbitCamera.beta = Math.PI / 4
-      this.orbitCamera.radius = span * 1.5
-      this.scene?.render(true)
    }
 
    // Report the print's Z extent (Babylon y is height) so the main thread can bound the clip sliders
@@ -440,6 +616,9 @@ export default class Viewer {
    setBuildVolume(volume: BuildVolume) {
       if (this.bed) {
          this.bed.buildVolume = volume
+         this.ruler?.build(volume)
+         // Set the spacing before commitBedSize so the grid is rebuilt once, not twice
+         this.bed.setGridMajorSpacing(this.ruler?.visible ? this.ruler.tickInterval : null)
          this.bed.commitBedSize()
          this.axes?.render()
          this.scene?.render(true)
@@ -452,6 +631,22 @@ export default class Viewer {
 
    setBedColor(color: string) {
       this.bed?.setBedColor(color)
+      if (this.bed && this.ruler) {
+         this.ruler.color = this.bed.getBedColor()
+         this.ruler.build(this.bed.buildVolume)
+      }
+   }
+
+   // Show not-yet-printed geometry in its own colours, faded to the transparency value
+   setAlphaMode(mode: boolean) {
+      this.alphaMode = mode
+      this.processor.modelMaterial.forEach((m) => m.setAlphaMode(mode))
+   }
+
+   // Show not-yet-printed geometry in the progress colour instead
+   setProgressMode(mode: boolean) {
+      this.progressMode = mode
+      this.processor.modelMaterial.forEach((m) => m.setProgressMode(mode))
    }
 
    // Colour used for not-yet-printed geometry in progress mode (hex string, e.g. "#FFFFFFFF")
@@ -513,6 +708,23 @@ export default class Viewer {
 
    showAxes(visible: boolean) {
       this.axes?.show(visible)
+   }
+
+   // Tick labels along the front and left bed edges
+   showRuler(visible: boolean) {
+      this.ruler?.show(visible)
+      this.syncGridToRuler()
+   }
+
+   // Tick spacing in mm, null to size it from the bed
+   setRulerInterval(interval: number | null) {
+      this.ruler?.setInterval(interval)
+      this.syncGridToRuler()
+   }
+
+   private syncGridToRuler() {
+      this.bed?.setGridMajorSpacing(this.ruler?.visible ? this.ruler.tickInterval : null)
+      this.scene?.render(true)
    }
 
    // Origin markers for the workplaces the file shifts into. Only ones with a non-zero offset are

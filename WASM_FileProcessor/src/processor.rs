@@ -63,12 +63,10 @@ impl FileProcessor {
         // Reset processor state for new file
         self.properties.reset();
 
-        // Detect slicer type and initialize colors
-        let slicer = detect_slicer(file_content);
+        // Feature-coloring state starts at the SlicerBase defaults set by reset() above and stays
+        // there until the first ;TYPE: comment updates it, so there is nothing to seed here
+        let mut slicer = detect_slicer(file_content);
         self.properties.slicer_name = slicer.get_name().to_string();
-
-        // Initialize default feature color from slicer
-        self.properties.current_feature_color = slicer.get_feature_color(&crate::slicers::slicer_base::FeatureType::Perimeter);
 
         // Estimate processing parameters
         let file_length = file_content.len();
@@ -104,7 +102,7 @@ impl FileProcessor {
             // OrcaSlicer/BambuStudio use "; FEATURE:" instead of ";TYPE:"
             let trimmed = line.trim();
             if trimmed.starts_with(";TYPE:") || trimmed.starts_with("; FEATURE:") || trimmed.starts_with(";FEATURE:") {
-                self.process_feature_comment(&slicer, trimmed);
+                self.process_feature_comment(slicer.as_mut(), trimmed);
             }
 
             match process_line(&mut self.properties, line, file_position, line_number) {
@@ -299,13 +297,11 @@ impl FileProcessor {
     }
     
     /// Process slicer feature comments to update coloring state
-    fn process_feature_comment(&mut self, slicer: &Box<dyn crate::slicers::slicer_base::SlicerBase>, line: &str) {
-        if let Some(feature) = slicer.parse_feature_from_comment(line) {
-            // Update current feature color based on detected feature
-            self.properties.current_feature_color = slicer.get_feature_color(&feature);
-            self.properties.current_is_perimeter = slicer.is_perimeter_comment(line);
-            self.properties.current_is_support = slicer.is_support_comment(line);
-        }
+    fn process_feature_comment(&mut self, slicer: &mut dyn crate::slicers::slicer_base::SlicerBase, line: &str) {
+        slicer.process_comment(line);
+        self.properties.current_feature_color = slicer.get_feature_color();
+        self.properties.current_is_perimeter = slicer.is_perimeter();
+        self.properties.current_is_support = slicer.is_support();
     }
 }
 

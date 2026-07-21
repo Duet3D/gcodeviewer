@@ -8,6 +8,8 @@ import { Axis, Space } from '@babylonjs/core/Maths/math.axis'
 import { Color3 } from '@babylonjs/core/Maths/math.color'
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial'
 import { MeshBuilder } from '@babylonjs/core/Meshes/meshBuilder'
+import { Mesh } from '@babylonjs/core/Meshes/mesh'
+import { HighlightLayer } from '@babylonjs/core/Layers/highlightLayer'
 // Scene.pick is a no-op stub unless the ray module is pulled in
 import '@babylonjs/core/Culling/ray'
 import { makeTextPlane } from './textplane'
@@ -27,6 +29,8 @@ export default class ViewBox {
    private camera: ArcRotateCamera
    private mainCamera: ArcRotateCamera
    private edgeMaterial: StandardMaterial
+   private highlightLayer: HighlightLayer
+   private hoveredMesh: Mesh | null = null
    visible = true
    onDirectionSelected: ((direction: ViewBoxDirection) => void) | null = null
 
@@ -48,6 +52,13 @@ export default class ViewBox {
 
       this.edgeMaterial = new StandardMaterial('viewboxEdgeMaterial', this.scene)
       this.edgeMaterial.diffuseColor = new Color3(0.5, 0.5, 0.5)
+
+      // A HighlightLayer works across all three mesh shapes without giving each its own material,
+      // and the edges share one. The gizmo's meshes are small on screen, so the default blur is
+      // too thin to read as an affordance
+      this.highlightLayer = new HighlightLayer('viewboxHighlight', this.scene, { blurHorizontalSize: 3, blurVerticalSize: 3 })
+      this.highlightLayer.outerGlow = true
+      this.highlightLayer.innerGlow = true
 
       const x = 3.9
       this.buildEdge('FrontLeft', new Vector3(-x, 0, -x))
@@ -84,22 +95,51 @@ export default class ViewBox {
 
    }
 
+   // Edge boxes and corner spheres sit just inside the face planes, so a plain closest-hit pick
+   // returns the face that occludes them near the cube's edges/corners. Test the edges/corners
+   // first (ignoring the six face planes) so those small targets win, then fall back to the faces
+   private pickMesh(x: number, y: number): Mesh | null {
+      let pickResult = this.scene.pick(x, y, (mesh) => mesh.isPickable && !ViewBox.FACE_NAMES.has(mesh.name), false, this.camera)
+      if (!pickResult.hit || !pickResult.pickedMesh?.metadata) {
+         pickResult = this.scene.pick(x, y, undefined, false, this.camera)
+      }
+      return pickResult.hit && pickResult.pickedMesh?.metadata ? (pickResult.pickedMesh as Mesh) : null
+   }
+
    // Pointer events only reach the main scene in the worker, so the caller forwards taps here for manual picking
    pick(x: number, y: number): ViewBoxDirection | null {
       if (!this.visible) {
          return null
       }
-      // Edge boxes and corner spheres sit just inside the face planes, so a plain closest-hit pick
-      // returns the face that occludes them near the cube's edges/corners. Test the edges/corners
-      // first (ignoring the six face planes) so those small targets win, then fall back to the faces
-      let pickResult = this.scene.pick(x, y, (mesh) => mesh.isPickable && !ViewBox.FACE_NAMES.has(mesh.name), false, this.camera)
-      if (!pickResult.hit || !pickResult.pickedMesh?.metadata) {
-         pickResult = this.scene.pick(x, y, undefined, false, this.camera)
+      return this.pickMesh(x, y)?.metadata as ViewBoxDirection ?? null
+   }
+
+   // Highlights whatever a click would snap to right now. Shares pickMesh with pick() so the two can
+   // never disagree. This scene holds ~26 meshes whatever the model size, so picking every pointer
+   // move is cheap here, unlike the main scene where it is deliberately throttled
+   updateHover(x: number, y: number): void {
+      if (!this.visible) {
+         this.clearHover()
+         return
       }
-      if (pickResult.hit && pickResult.pickedMesh?.metadata) {
-         return pickResult.pickedMesh.metadata as ViewBoxDirection
+      const mesh = this.pickMesh(x, y)
+      if (mesh === this.hoveredMesh) {
+         return
       }
-      return null
+      if (this.hoveredMesh) {
+         this.highlightLayer.removeMesh(this.hoveredMesh)
+      }
+      this.hoveredMesh = mesh
+      if (mesh) {
+         this.highlightLayer.addMesh(mesh, new Color3(1, 1, 0))
+      }
+   }
+
+   clearHover(): void {
+      if (this.hoveredMesh) {
+         this.highlightLayer.removeMesh(this.hoveredMesh)
+         this.hoveredMesh = null
+      }
    }
 
    private buildPlane(name: string, rotationVector: Vector3) {
@@ -189,6 +229,9 @@ export default class ViewBox {
 
    show(visible: boolean) {
       this.visible = visible
+      if (!visible) {
+         this.clearHover()
+      }
    }
 
    dispose() {

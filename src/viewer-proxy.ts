@@ -310,13 +310,14 @@ export default class ViewerProxy {
       this.webWorker.postMessage({ type: 'setCameraDirection', direction: direction })
    }
 
-   resetCamera(): void {
-      this.webWorker.postMessage({ type: 'resetCamera' })
+   // Animating is for an explicit user action; load-time framing should just snap into place
+   resetCamera(animate = false): void {
+      this.webWorker.postMessage({ type: 'resetCamera', animate: animate })
    }
 
    // Frame the loaded print (rather than the whole bed) with the default front-45 orientation
-   frameToPrint(): void {
-      this.webWorker.postMessage({ type: 'frameToPrint' })
+   frameToPrint(animate = false): void {
+      this.webWorker.postMessage({ type: 'frameToPrint', animate: animate })
    }
 
    // Ask the worker to report the print's Z extent; arrives as a `printbounds` event via passThru
@@ -421,6 +422,16 @@ export default class ViewerProxy {
 
    showAxes(visible: boolean): void {
       this.webWorker.postMessage({ type: 'showAxes', visible: visible })
+   }
+
+   // Tick labels along the front and left bed edges
+   showRuler(visible: boolean): void {
+      this.webWorker.postMessage({ type: 'showRuler', visible: visible })
+   }
+
+   // Tick spacing in mm, null to size it from the bed
+   setRulerInterval(interval: number | null): void {
+      this.webWorker.postMessage({ type: 'setRulerInterval', interval: interval })
    }
 
 
