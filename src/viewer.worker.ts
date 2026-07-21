@@ -165,8 +165,17 @@ self.addEventListener('message', async (message) => {
       case 'setProgressColor':
          self.viewer.setProgressColor(message.data.color)
          break
-      case 'setTransparencyValue':
-         self.viewer.setTransparencyValue(message.data.value)
+      case 'setLiveTracking':
+         self.viewer.setLiveTracking(message.data.enabled)
+         break
+      case 'setTrailDuration':
+         self.viewer.setTrailDuration(message.data.seconds)
+         break
+      case 'setTrailColor':
+         self.viewer.setTrailColor(message.data.color)
+         break
+      case 'setUnprintedOpacity':
+         self.viewer.setUnprintedOpacity(message.data.value)
          break
       case 'setShowTravels':
          self.viewer.setShowTravels(message.data.show)

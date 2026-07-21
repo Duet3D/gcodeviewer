@@ -637,7 +637,7 @@ export default class Viewer {
       }
    }
 
-   // Show not-yet-printed geometry in its own colours, faded to the transparency value
+   // Show not-yet-printed geometry in its own colours, faded to the opacity value
    setAlphaMode(mode: boolean) {
       this.alphaMode = mode
       this.processor.modelMaterial.forEach((m) => m.setAlphaMode(mode))
@@ -655,9 +655,27 @@ export default class Viewer {
       this.processor.modelMaterial.forEach((m) => m.setProgressColor([c.r * 255, c.g * 255, c.b * 255, c.a * 255]))
    }
 
+   // Whether file positions are being fed from a running job. Off, position changes are treated as
+   // seeks and paint no trail
+   setLiveTracking(enabled: boolean) {
+      this.processor.setLiveTracking(enabled)
+   }
+
+   // Seconds a freshly printed segment takes to fade from red through yellow to its own colour. Zero
+   // disables the fade
+   setTrailDuration(seconds: number) {
+      this.processor.setTrailDuration(seconds)
+   }
+
+   // Colour a freshly printed segment starts at before fading to its own colour (hex string)
+   setTrailColor(color: string) {
+      const c = Color4.FromHexString(color.padEnd(9, 'F'))
+      this.processor.setTrailColor([c.r * 255, c.g * 255, c.b * 255])
+   }
+
    // Opacity (0-1) of not-yet-printed geometry while alpha mode is on
-   setTransparencyValue(value: number) {
-      this.processor.modelMaterial.forEach((m) => m.setAlphaValue(value))
+   setUnprintedOpacity(value: number) {
+      this.processor.modelMaterial.forEach((m) => m.setUnprintedOpacity(value))
    }
 
    // Show/hide the printed travel (non-extruding) moves

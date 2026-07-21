@@ -357,8 +357,20 @@ export default class ViewerProxy {
       this.webWorker.postMessage({ type: 'setProgressColor', color: color })
    }
 
-   setTransparencyValue(value: number): void {
-      this.webWorker.postMessage({ type: 'setTransparencyValue', value: value })
+   setLiveTracking(enabled: boolean): void {
+      this.webWorker.postMessage({ type: 'setLiveTracking', enabled: enabled })
+   }
+
+   setTrailDuration(seconds: number): void {
+      this.webWorker.postMessage({ type: 'setTrailDuration', seconds: seconds })
+   }
+
+   setTrailColor(color: string): void {
+      this.webWorker.postMessage({ type: 'setTrailColor', color: color })
+   }
+
+   setUnprintedOpacity(value: number): void {
+      this.webWorker.postMessage({ type: 'setUnprintedOpacity', value: value })
    }
 
    setShowTravels(show: boolean): void {

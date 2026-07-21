@@ -4,14 +4,27 @@ import { UniformBuffer } from '@babylonjs/core/Materials/uniformBuffer'
 import { Vector3, Vector4 } from '@babylonjs/core/Maths/math.vector'
 import '@babylonjs/core/Materials/standardMaterial'
 
+// Clock shared by the trail fade uniforms and the position history recorded in the processor. Both
+// must use the same epoch, and raw performance.now() loses sub-second resolution once cast to float32
+const trailEpoch = performance.now()
+
+export function trailTime(): number {
+   return (performance.now() - trailEpoch) / 1000
+}
+
 export default class LineShaderMaterial {
    scene: Scene
    material: ShaderMaterial
    toolBuffer: UniformBuffer
    renderMode = 0
 
+   // Number of position/time samples the trail fade interpolates over. The processor keeps the same
+   // number and pads the unused front slots, so index TRAIL_HISTORY_SIZE - 1 is always the newest
+   static readonly trailHistorySize = 64
+
    static readonly vertexShader = `
    #define THIN_INSTANCES
+   #define TRAIL_HISTORY_SIZE ${LineShaderMaterial.trailHistorySize}
    precision highp float;
    
 
@@ -30,7 +43,11 @@ export default class LineShaderMaterial {
    uniform mat4 worldView;
    uniform mat4 view;
 
-   uniform float animationLength;
+   uniform float trailDuration;
+   uniform vec3 trailColor;
+   uniform float currentTime;
+   uniform float trailStartPosition;
+   uniform vec2 posHistory[TRAIL_HISTORY_SIZE];
    uniform float currentPosition;
    uniform vec4 toolColors[20];
    uniform vec3 focusedPickColor;
@@ -43,7 +60,6 @@ export default class LineShaderMaterial {
    uniform bool persistTravels;
    uniform vec3 minFeedColor;
    uniform vec3 maxFeedColor;
-   uniform float utime;
    uniform int renderMode;
 
    uniform bool alphaMode;
@@ -62,6 +78,30 @@ export default class LineShaderMaterial {
    flat out float focused;
 
  #include<instancesDeclaration>
+
+   // Seconds since the print head passed a file offset. Samples run oldest to newest and the head only
+   // ever moves forward, so scanning backwards finds the bracketing pair to interpolate between
+   float secondsSincePrinted(float pos)
+   {
+      float passedAt = posHistory[0].y;
+      for (int i = TRAIL_HISTORY_SIZE - 1; i >= 0; i--)
+      {
+         if (posHistory[i].x <= pos)
+         {
+            passedAt = posHistory[i].y;
+            if (i < TRAIL_HISTORY_SIZE - 1)
+            {
+               float span = posHistory[i + 1].x - posHistory[i].x;
+               if (span > 0.0)
+               {
+                  passedAt = mix(posHistory[i].y, posHistory[i + 1].y, clamp((pos - posHistory[i].x) / span, 0.0, 1.0));
+               }
+            }
+            break;
+         }
+      }
+      return currentTime - passedAt;
+   }
 
    void main()
    {
@@ -102,6 +142,9 @@ export default class LineShaderMaterial {
          fShow = currentPosition - filePosition;
          focused = 0.;
 
+         // Anything older than the first sample has left the trail, so skip the history scan for it
+         float age = (fShow >= 0.0 && filePosition >= trailStartPosition) ? secondsSincePrinted(filePosition) : trailDuration;
+
          if(focusedPickColor == pickColor && !(currentPosition >= filePosition && currentPosition <= filePositionEnd)) 
          {
             vDiffColor = vec3(1, 1, 1) - vDiffColor.rgb;
@@ -113,9 +156,9 @@ export default class LineShaderMaterial {
             {
                bDiscard = 1.;
             }
-            else if(fShow >= 0.0 && fShow < animationLength / 8.0)
+            else if(fShow >= 0.0 && age < trailDuration / 8.0)
             {
-                  vDiffColor = mix(vec3(1.0, 0.0, 0.0), vec3(0.5,0.0,0.0), fShow / animationLength / 2.0);
+                  vDiffColor = mix(vec3(1.0, 0.0, 0.0), vec3(0.5,0.0,0.0), age / (trailDuration / 8.0));
             }
             else if (fShow >= 0.0)
             {
@@ -133,16 +176,15 @@ export default class LineShaderMaterial {
          }
          else //Extrusion
          {
-            if (fShow >= 0.0  && fShow < animationLength) 
-            { 
-               if(currentPosition < filePositionEnd){
-                  // float animation = smoothstep(0.0, 1.0, fract(utime / 50.0));
-                  float animation = sin(2.0 * 3.1415 * utime / 1000.0) * 0.5 + 0.5;
-                  vDiffColor = mix(vec3(0, 0, 1), vec3(0,1,0), animation);
-               }
-               else 
+            if (fShow >= 0.0  && age < trailDuration)
+            {
+               if(currentPosition < filePositionEnd)
                {
-                  vDiffColor = mix(vec3(1, 1, 1) - vDiffColor.rgb, vDiffColor.rgb, fShow / animationLength);
+                  vDiffColor = trailColor;
+               }
+               else
+               {
+                  vDiffColor = mix(trailColor, vDiffColor.rgb, age / trailDuration);
                }
             }
             else if (fShow < 0.0 && progressMode)
@@ -183,7 +225,7 @@ export default class LineShaderMaterial {
    uniform bool lineMesh;
    uniform bool alphaMode;
    uniform bool progressMode;
-   uniform float alphaValue;
+   uniform float unprintedOpacity;
    uniform bool useSpecular;
 
    flat in vec3 vDiffColor;
@@ -208,11 +250,11 @@ export default class LineShaderMaterial {
          }
          else if(progressMode && fShow < 0.0)
          {
-            diffuseColor.a = alphaValue;
+            diffuseColor.a = unprintedOpacity;
          }
          else
          {
-            diffuseColor.a = fShow >= 0.0 || !alphaMode ? 0.99 : alphaValue;
+            diffuseColor.a = fShow >= 0.0 || !alphaMode ? 0.99 : unprintedOpacity;
          }
          
         if(lineMesh) {
@@ -281,7 +323,11 @@ export default class LineShaderMaterial {
                'view',
                'projection',
                'viewProjection',
-               'animationLength',
+               'trailDuration',
+               'trailColor',
+               'currentTime',
+               'trailStartPosition',
+               'posHistory',
                'currentPosition',
                'renderMode',
                'toolColors',
@@ -289,7 +335,7 @@ export default class LineShaderMaterial {
                'maxFeedRate',
                'minFeedRate',
                'alphaMode',
-               'alphaValue',
+               'unprintedOpacity',
                'progressMode',
                'progressColor',
                'lineMesh',
@@ -300,7 +346,6 @@ export default class LineShaderMaterial {
                'minFeedColor',
                'maxFeedColor',
                'useSpecular',
-               'utime',
             ],
             // Off by default in ShaderMaterial, and without it the Z clipping planes set on
             // the scene never reach this material
@@ -312,9 +357,12 @@ export default class LineShaderMaterial {
       this.material.forceDepthWrite = true
 
       //Set defaults
-      this.material.setFloat('animationLength', 5000)
+      this.material.setFloat('trailDuration', 20)
+      this.material.setVector3('trailColor', new Vector3(1, 1, 1))
+      this.material.setFloat('trailStartPosition', Number.MAX_SAFE_INTEGER)
+      this.material.setArray2('posHistory', new Array(LineShaderMaterial.trailHistorySize * 2).fill(0))
       this.material.setVector4('progressColor', new Vector4(0, 1, 0, 1))
-      this.material.setFloat('alphaValue', 0.05)
+      this.material.setFloat('unprintedOpacity', 0.05)
       this.material.setInt('showTravels', 0)
       this.material.setInt('persistTravels', 0)
       this.material.setInt('useSpecular', 0)
@@ -324,10 +372,8 @@ export default class LineShaderMaterial {
       this.material.setInt('lineMesh', 0)
 
       //Per loop
-      let time = 0
       this.material.onBindObservable.add(() => {
-         time += this.scene.getEngine().getDeltaTime()
-         this.material.getEffect()?.setFloat('utime', time)
+         this.material.getEffect()?.setFloat('currentTime', trailTime())
       })
    }
 
@@ -343,6 +389,20 @@ export default class LineShaderMaterial {
 
    updateCurrentFilePosition(position: number) {
       this.material.setFloat('currentPosition', position)
+   }
+
+   // Position/time samples backing the trail fade, oldest first and padded to trailHistorySize
+   updateTrailHistory(history: number[], startPosition: number) {
+      this.material.setArray2('posHistory', history)
+      this.material.setFloat('trailStartPosition', startPosition)
+   }
+
+   setTrailDuration(seconds: number) {
+      this.material.setFloat('trailDuration', seconds)
+   }
+
+   setTrailColor(color: number[]) {
+      this.material.setVector3('trailColor', new Vector3(color[0] / 255, color[1] / 255, color[2] / 255))
    }
 
    getMaterial() {
@@ -373,8 +433,8 @@ export default class LineShaderMaterial {
    }
 
    // Opacity (0-1) of not-yet-printed geometry while alpha mode is on
-   setAlphaValue(value: number) {
-      this.material.setFloat('alphaValue', value)
+   setUnprintedOpacity(value: number) {
+      this.material.setFloat('unprintedOpacity', value)
    }
 
    setProgressMode(mode: boolean) {

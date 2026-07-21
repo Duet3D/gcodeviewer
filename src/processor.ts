@@ -13,7 +13,7 @@ import GPUPicker from './gpupicker'
 import { colorToNum, binarySearchClosest } from './util'
 import { MoveData } from './GCodeLines/move'
 import { slicerFactory } from './GCodeParsers/slicerfactory'
-import LineShaderMaterial from './lineshader'
+import LineShaderMaterial, { trailTime } from './lineshader'
 import Nozzle from './Renderables/nozzle'
 import { WasmProcessor, WasmRenderBuffers } from './wasmprocessor'
 
@@ -39,6 +39,14 @@ export default class Processor {
    // whole file while the playback position stays at the start, so animation begins from the beginning
    renderedFilePosition = 0
    focusedColorId = 0
+   trailDuration = 20
+   // Position updates arrive from the same entry point whether a live job is being followed or the user
+   // is dragging the slider, so only the host knows whether the trail should animate
+   liveTracking = false
+   trailColor = [255, 255, 255]
+   // Position/time samples the shader interpolates to age each segment, oldest first. Sampled at most
+   // once per window slice so a per-frame playback loop cannot flush the whole window in a few ticks
+   private trailHistory: { position: number; time: number }[] = []
    // Hover highlighting is the affordance for click-to-seek, so it follows the same flag
    allowSeek = true
    lastMeshMode = 0
@@ -319,6 +327,9 @@ export default class Processor {
       // Re-assert the perimeter-only filter on the freshly built materials (meshes always carry the
       // full geometry now, so toggling it is a cheap uniform change rather than a reparse)
       this.modelMaterial.forEach((m) => m.setPerimeterOnly(this.perimeterOnly))
+      this.setTrailDuration(this.trailDuration)
+      this.setTrailColor(this.trailColor)
+      this.resetTrail()
 
       const lastPosition = this.gCodeLines[this.gCodeLines.length - 1].filePosition
       this.renderedFilePosition = lastPosition
@@ -893,9 +904,79 @@ export default class Processor {
       this.worker.postMessage({ type: 'getgcodes', lines: lines })
    }
 
+   // Zero turns the fade off: segments take their own colour the moment they are printed
+   setTrailDuration(seconds: number) {
+      this.trailDuration = Math.max(0, seconds)
+      this.modelMaterial.forEach((m) => m.setTrailDuration(this.effectiveTrailDuration()))
+      if (this.trailDuration === 0) {
+         this.resetTrail()
+      }
+   }
+
+   // Playback at 10x covers ten times the geometry per second, so the window shrinks to match and the
+   // trail always spans the same amount of printing rather than the same amount of wall clock
+   private effectiveTrailDuration() {
+      return this.isPlaying ? this.trailDuration / (this.nozzle?.getAnimationSpeed() ?? 1) : this.trailDuration
+   }
+
+   setLiveTracking(enabled: boolean) {
+      this.liveTracking = enabled
+      if (!enabled) {
+         this.resetTrail()
+      }
+   }
+
+   setTrailColor(color: number[]) {
+      this.trailColor = color
+      this.modelMaterial.forEach((m) => m.setTrailColor(color))
+   }
+
+   // Drops every sample, so nothing is left inside the trail window
+   resetTrail() {
+      this.trailHistory = []
+      this.modelMaterial.forEach((m) => m.updateTrailHistory(new Array(LineShaderMaterial.trailHistorySize * 2).fill(0), Number.MAX_SAFE_INTEGER))
+   }
+
+   private recordTrailSample(position: number) {
+      // Playback simulates printing, so it paints the trail just like a live job does
+      if ((!this.liveTracking && !this.isPlaying) || this.trailDuration === 0) {
+         return
+      }
+
+      const duration = this.effectiveTrailDuration()
+      const now = trailTime()
+      const newest = this.trailHistory[this.trailHistory.length - 1]
+      if (newest !== undefined) {
+         // Seeking backwards invalidates the samples: they only describe a forward-moving head
+         if (position < newest.position) {
+            this.trailHistory = []
+         } else if (now - newest.time < duration / LineShaderMaterial.trailHistorySize) {
+            return
+         }
+      }
+
+      this.trailHistory.push({ position: position, time: now })
+      if (this.trailHistory.length > LineShaderMaterial.trailHistorySize) {
+         this.trailHistory.shift()
+      }
+
+      const packed = new Array(LineShaderMaterial.trailHistorySize * 2)
+      const padding = LineShaderMaterial.trailHistorySize - this.trailHistory.length
+      for (let i = 0; i < LineShaderMaterial.trailHistorySize; i++) {
+         const sample = this.trailHistory[Math.max(0, i - padding)]
+         packed[i * 2] = sample.position
+         packed[i * 2 + 1] = sample.time
+      }
+      this.modelMaterial.forEach((m) => {
+         m.setTrailDuration(duration)
+         m.updateTrailHistory(packed, this.trailHistory[0].position)
+      })
+   }
+
    updateFilePosition(position: number, animate: boolean = false) {
       this.filePosition = position // Store the current position
       this.renderedFilePosition = position
+      this.recordTrailSample(position)
       this.modelMaterial.forEach((m) => m.updateCurrentFilePosition(position)) //Set it to the end
       this.gpuPicker.updateCurrentPosition(position)
 
@@ -1332,6 +1413,7 @@ export default class Processor {
          // Update file position to match animation progress - but don't trigger position change events
          this.filePosition = nextFilePosition
          this.renderedFilePosition = nextFilePosition
+         this.recordTrailSample(nextFilePosition)
          this.modelMaterial.forEach((m) => m.updateCurrentFilePosition(nextFilePosition))
          this.gpuPicker.updateCurrentPosition(nextFilePosition)
 
