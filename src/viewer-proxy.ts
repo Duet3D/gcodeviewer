@@ -310,14 +310,14 @@ export default class ViewerProxy {
       this.webWorker.postMessage({ type: 'setCameraDirection', direction: direction })
    }
 
+   // What resetCamera frames; leaving or returning to it arrives as a `cameradefault` event
+   setDefaultFraming(mode: 'bed' | 'print'): void {
+      this.webWorker.postMessage({ type: 'setDefaultFraming', mode: mode })
+   }
+
    // Animating is for an explicit user action; load-time framing should just snap into place
    resetCamera(animate = false): void {
       this.webWorker.postMessage({ type: 'resetCamera', animate: animate })
-   }
-
-   // Frame the loaded print (rather than the whole bed) with the default front-45 orientation
-   frameToPrint(animate = false): void {
-      this.webWorker.postMessage({ type: 'frameToPrint', animate: animate })
    }
 
    // Ask the worker to report the print's Z extent; arrives as a `printbounds` event via passThru

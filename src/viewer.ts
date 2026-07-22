@@ -61,6 +61,12 @@ export default class Viewer {
    // the camera framing has to stop at the current file position instead of the whole file
    private alphaMode = false
    private progressMode = false
+   private defaultFraming: 'bed' | 'print' = 'bed'
+   // Where the last default framing left the camera, to tell it apart from one the user has moved
+   private defaultCameraState: { alpha: number; beta: number; radius: number; target: Vector3 } | null = null
+   private cameraAtDefault = true
+   private cameraAnimating = false
+   private lastNozzleZ: number | null = null
    offscreen: boolean = true
    // Animation runs at a nominal 60 fps, so this is a half-second transition
    private static readonly CAMERA_TRANSITION_FRAMES = 30
@@ -266,6 +272,7 @@ export default class Viewer {
          
          this.scene?.render()
          this.viewBox?.render()
+         this.updateCameraDefaultState()
          this.lastFrameUpdate = Date.now()
       })
 
@@ -310,6 +317,7 @@ export default class Viewer {
    // Assigning target normally rebuilds alpha/beta/radius from the camera position, which would undo
    // the angle animations on every frame, so the override stays on for as long as one is running
    private stopCameraAnimation() {
+      this.cameraAnimating = false
       if (this.orbitCamera) {
          this.scene?.stopAnimation(this.orbitCamera)
          this.orbitCamera.overrideCloneAlphaBetaRadius = null
@@ -327,6 +335,7 @@ export default class Viewer {
       const ease = new CubicEase()
       ease.setEasingMode(EasingFunction.EASINGMODE_EASEINOUT)
       this.stopCameraAnimation()
+      this.cameraAnimating = true
       this.orbitCamera.overrideCloneAlphaBetaRadius = true
       Animation.CreateAndStartAnimation('cameraAlpha', this.orbitCamera, 'alpha', 60, Viewer.CAMERA_TRANSITION_FRAMES, this.orbitCamera.alpha, shortestAlpha, Animation.ANIMATIONLOOPMODE_CONSTANT, ease)
       Animation.CreateAndStartAnimation('cameraBeta', this.orbitCamera, 'beta', 60, Viewer.CAMERA_TRANSITION_FRAMES, this.orbitCamera.beta, beta, Animation.ANIMATIONLOOPMODE_CONSTANT, ease)
@@ -370,23 +379,45 @@ export default class Viewer {
       this.animateCameraTo(toAlpha, toBeta, toRadius, target)
    }
 
-   // Default framing: the whole bed plus whatever is loaded on it, so nothing sticks out of frame
+   setDefaultFraming(mode: 'bed' | 'print') {
+      this.defaultFraming = mode
+   }
+
+   // Default framing: the whole bed plus whatever is loaded on it, so nothing sticks out of frame,
+   // or in print mode just the printed geometry as long as something has been parsed
    resetCamera(animate = false) {
       if (!this.orbitCamera || !this.bed) {
          return
       }
-      this.frameCorners(this.bedCorners().concat(this.printCorners()), animate)
+      const printCorners = this.printCorners()
+      this.frameCorners(this.defaultFraming === 'print' && printCorners.length > 0 ? printCorners : this.bedCorners().concat(printCorners), animate)
    }
 
-   // Framed to the printed geometry rather than the whole bed (used by the embedded job view); falls
-   // back to bed framing when nothing is loaded yet
-   frameToPrint(animate = false) {
-      const corners = this.printCorners()
-      if (corners.length === 0) {
-         this.resetCamera(animate)
+   // Compared by value, so orbiting back by hand counts as home again
+   private updateCameraDefaultState() {
+      const camera = this.orbitCamera
+      if (!camera || !this.defaultCameraState || this.cameraAnimating) {
          return
       }
-      this.frameCorners(corners, animate)
+      const state = this.defaultCameraState
+      const alphaDiff = Math.abs(camera.alpha - state.alpha) % (2 * Math.PI)
+      const isDefault = Math.min(alphaDiff, 2 * Math.PI - alphaDiff) < 1e-3 && Math.abs(camera.beta - state.beta) < 1e-3 && Math.abs(camera.radius - state.radius) < state.radius / 200 && Vector3.Distance(camera.target, state.target) < 0.5
+      if (isDefault !== this.cameraAtDefault) {
+         this.cameraAtDefault = isDefault
+         this.worker.postMessage({ type: 'cameradefault', isDefault: isDefault })
+      }
+   }
+
+   // A print growing upwards eventually leaves the framing it started with, so follow it up for as
+   // long as the user has not taken the camera off its default position
+   private followPrintHeight(z: number) {
+      if (z === this.lastNozzleZ) {
+         return
+      }
+      this.lastNozzleZ = z
+      if (this.cameraAtDefault && this.processor.liveTracking) {
+         this.resetCamera()
+      }
    }
 
    // Bed footprint corners on the plate, in Babylon space (x = G-code X, y = height, z = G-code Y)
@@ -446,6 +477,7 @@ export default class Viewer {
          this.centerVertically(camera, corners)
       }
 
+      this.defaultCameraState = { alpha: -Math.PI / 2, beta: Math.PI / 4, radius: camera.radius, target: camera.target.clone() }
       if (animate) {
          const toRadius = camera.radius, toTarget = camera.target.clone()
          camera.target = fromTarget
@@ -709,6 +741,7 @@ export default class Viewer {
    // Absolute nozzle marker position in G-code coordinates, for following a live job
    setNozzlePosition(x: number, y: number, z: number, animate: boolean) {
       this.processor.setNozzlePosition(x, y, z, animate)
+      this.followPrintHeight(z)
    }
 
    // Playback speed multiplier for the nozzle animation (the scrubber's play button)

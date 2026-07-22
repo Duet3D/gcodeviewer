@@ -132,8 +132,8 @@ self.addEventListener('message', async (message) => {
       case 'setCameraDirection':
          self.viewer.setCameraDirection(message.data.direction)
          break
-      case 'frameToPrint':
-         self.viewer.frameToPrint(message.data.animate)
+      case 'setDefaultFraming':
+         self.viewer.setDefaultFraming(message.data.mode)
          break
       case 'requestPrintBounds':
          self.viewer.postPrintBounds()
