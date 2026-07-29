@@ -169,52 +169,10 @@ pub fn parse_parameter(bytes: &[u8], start_idx: usize) -> Option<(char, f64, usi
     }
 }
 
-/// Split a line into tokens starting with letters
-pub fn tokenize_gcode_line(line: &str) -> Vec<&str> {
-    let bytes = line.as_bytes();
-    let mut tokens = Vec::new();
-    let mut start = 0;
-    
-    // Skip leading whitespace
-    while start < bytes.len() && bytes[start] == b' ' {
-        start += 1;
-    }
-    
-    let mut i = start;
-    while i < bytes.len() {
-        // If we find a letter, this might be the start of a new token
-        if bytes[i].is_ascii_alphabetic() && i > start {
-            // Add the previous token
-            if start < i {
-                tokens.push(&line[start..i]);
-            }
-            start = i;
-        }
-        i += 1;
-    }
-    
-    // Add the last token
-    if start < bytes.len() {
-        tokens.push(&line[start..]);
-    }
-    
-    tokens
-}
-
 /// Check if a line is a comment (starts with ; or is empty/whitespace)
 pub fn is_comment_line(line: &str) -> bool {
     let trimmed = line.trim();
     trimmed.is_empty() || trimmed.starts_with(';')
-}
-
-/// Extract comment text from a comment line
-pub fn extract_comment(line: &str) -> &str {
-    let trimmed = line.trim();
-    if trimmed.starts_with(';') {
-        trimmed[1..].trim()
-    } else {
-        trimmed
-    }
 }
 
 /// Fast G-code command detection
@@ -254,31 +212,6 @@ pub fn detect_gcode_command(line: &str) -> Option<&str> {
     }
 }
 
-/// Calculate distance between two 3D points
-pub fn distance_3d(p1: &[f64; 3], p2: &[f64; 3]) -> f64 {
-    let dx = p1[0] - p2[0];
-    let dy = p1[1] - p2[1];
-    let dz = p1[2] - p2[2];
-    (dx * dx + dy * dy + dz * dz).sqrt()
-}
-
-/// Normalize a 3D vector
-pub fn normalize_3d(v: &[f64; 3]) -> [f64; 3] {
-    let length = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-    if length > 0.0 {
-        [v[0] / length, v[1] / length, v[2] / length]
-    } else {
-        [0.0, 0.0, 0.0]
-    }
-}
-
-/// Fast string to uppercase conversion for G-code commands
-pub fn to_uppercase_ascii(s: &str) -> String {
-    s.chars()
-        .map(|c| c.to_ascii_uppercase())
-        .collect()
-}
-
 /// Skip whitespace characters and return new position
 pub fn skip_whitespace(bytes: &[u8], mut pos: usize) -> usize {
     while pos < bytes.len() && (bytes[pos] == b' ' || bytes[pos] == b'\t') {
@@ -287,20 +220,9 @@ pub fn skip_whitespace(bytes: &[u8], mut pos: usize) -> usize {
     pos
 }
 
-/// Parse number from string (wrapper for compatibility)
-pub fn parse_number_from_str(line: &str, start_pos: usize) -> Result<(f64, usize), String> {
-    let bytes = line.as_bytes();
-    if let Some(result) = parse_number_fast(bytes, start_pos) {
-        Ok((result.value, start_pos + result.consumed_bytes))
-    } else {
-        Err("Failed to parse number".to_string())
-    }
-}
-
 /// Arc tessellation result containing intermediate points
 #[derive(Debug, Clone)]
 pub struct ArcResult {
-    pub final_position: Vector3,
     pub intermediate_points: Vec<Vector3>,
 }
 
@@ -353,7 +275,6 @@ pub fn tessellate_arc(
         let d_squared = delta0 * delta0 + delta1 * delta1;
         if d_squared == 0.0 {
             return Ok(ArcResult {
-                final_position: target,
                 intermediate_points: vec![],
             });
         }
@@ -386,7 +307,6 @@ pub fn tessellate_arc(
         // Center point is offset from current position
         if i == 0.0 && j == 0.0 {
             return Ok(ArcResult {
-                final_position: target,
                 intermediate_points: vec![],
             });
         }
@@ -454,11 +374,9 @@ pub fn tessellate_arc(
     }
     
     // Add final point and save a copy for the result
-    let final_pos = target.clone();
     points.push(target);
     
     Ok(ArcResult {
-        final_position: final_pos,
         intermediate_points: points,
     })
 }

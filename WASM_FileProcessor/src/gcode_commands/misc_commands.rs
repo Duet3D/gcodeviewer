@@ -103,7 +103,7 @@ pub fn parse_m567_mixing(
     properties.has_mixing = true;
     
     // Create M-code data
-    let mut mcode_data = MCodeData::new(file_position, line_number, line.to_string(), 567);
+    let mcode_data = MCodeData::new(file_position, line_number, line.to_string(), 567);
     
     // TODO: Parse mixing ratios from parameters if needed
     // This would require parsing E0, E1, E2, etc. parameters
@@ -126,18 +126,6 @@ pub fn parse_m600_filament_change(
     // Create M-code data
     let mcode_data = MCodeData::new(file_position, line_number, line.to_string(), 600);
     Ok(GCodeLine::MCode(mcode_data))
-}
-
-/// Parse blank/empty lines (utility function)
-pub fn parse_blank_line(
-    _properties: &mut ProcessorProperties,
-    line: &str,
-    file_position: u32,
-    line_number: u32,
-) -> Result<GCodeLine, String> {
-    
-    // Empty lines are treated as comments
-    Ok(GCodeLine::new_comment(file_position, line_number, line.to_string()))
 }
 
 #[cfg(test)]

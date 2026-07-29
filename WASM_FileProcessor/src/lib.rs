@@ -1,13 +1,12 @@
 use wasm_bindgen::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::gcode_line::Color4;
 
 // Import our modules
 mod gcode_line;
 mod processor_properties;
 mod processor;
-mod GCodeCommands;
+mod gcode_commands;
 mod slicers;
 mod utils;
 
@@ -18,11 +17,6 @@ mod tests;
 pub use gcode_line::*;
 pub use processor_properties::*;
 pub use processor::*;
-
-// Set up panic hook and allocator for WASM
-#[cfg(feature = "wee_alloc")]
-#[global_allocator]
-static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 
 #[wasm_bindgen(start)]
 pub fn main() {

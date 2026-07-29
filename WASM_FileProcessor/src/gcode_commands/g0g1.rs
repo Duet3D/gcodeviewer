@@ -1,4 +1,4 @@
-use crate::gcode_line::{GCodeLine, MoveData, Vector3, Color4};
+use crate::gcode_line::{GCodeLine, MoveData};
 use crate::processor_properties::ProcessorProperties;
 use crate::utils::parse_parameter;
 
@@ -43,7 +43,7 @@ pub fn parse_g0_g1_move(
             break;
         }
         
-        let param_start = i;
+        let _param_start = i;
         
         // Try to parse a parameter
         if let Some((letter, value, consumed)) = parse_parameter(bytes, i) {
@@ -219,36 +219,6 @@ pub fn is_g0_g1_command(line: &str) -> bool {
     }
 }
 
-/// Extract G-code command number from line
-/// Returns the G-code number if found (e.g., 0 for G0, 1 for G1)
-pub fn extract_g_command_number(line: &str) -> Option<u32> {
-    let bytes = line.trim().as_bytes();
-    
-    if bytes.len() < 2 || (bytes[0] != b'G' && bytes[0] != b'g') {
-        return None;
-    }
-    
-    let mut num = 0u32;
-    let mut found_digit = false;
-    
-    for &byte in &bytes[1..] {
-        match byte {
-            b'0'..=b'9' => {
-                found_digit = true;
-                num = num * 10 + (byte - b'0') as u32;
-            }
-            b' ' => break, // Space ends the command
-            _ => break,    // Other characters end the command
-        }
-    }
-    
-    if found_digit {
-        Some(num)
-    } else {
-        None
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,20 +238,6 @@ mod tests {
         assert!(!is_g0_g1_command("M104 S200"));
         assert!(!is_g0_g1_command("; comment"));
         assert!(!is_g0_g1_command(""));
-    }
-    
-    #[test]
-    fn test_extract_g_command_number() {
-        assert_eq!(extract_g_command_number("G0 X10"), Some(0));
-        assert_eq!(extract_g_command_number("G1 Y20"), Some(1));
-        assert_eq!(extract_g_command_number("G00 X10"), Some(0));
-        assert_eq!(extract_g_command_number("G01 Y20"), Some(1));
-        assert_eq!(extract_g_command_number("G28"), Some(28));
-        assert_eq!(extract_g_command_number("G90"), Some(90));
-        
-        assert_eq!(extract_g_command_number("M104"), None);
-        assert_eq!(extract_g_command_number("T1"), None);
-        assert_eq!(extract_g_command_number(""), None);
     }
     
     #[test]

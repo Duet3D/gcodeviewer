@@ -1,6 +1,7 @@
 use crate::gcode_line::Color4;
 
 /// Layer information
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct LayerInfo {
     pub layer_number: u32,
@@ -34,6 +35,7 @@ impl Default for FeatureState {
 /// (src/GCodeParsers/slicerbase.ts) exactly: `process_comment` is stateful (updates
 /// color/is_perimeter/is_support in place), and the getters read back that state rather than
 /// re-parsing the comment on every call.
+#[allow(dead_code)]
 pub trait SlicerBase {
     /// Process a `;TYPE:` comment and update feature-coloring state (mirrors TS processComment)
     fn process_comment(&mut self, comment: &str);
@@ -53,13 +55,13 @@ pub trait SlicerBase {
 /// slicerFactory.ts SLICER_PATTERNS exactly: PrusaSlicer, Cura, SuperSlicer, ideaMaker, Kiri:Moto,
 /// OrcaSlicer, then Generic as the fallback.
 pub fn detect_slicer(file_content: &str) -> Box<dyn SlicerBase> {
-    use crate::slicers::CuraSlicer::CuraSlicer;
-    use crate::slicers::GenericSlicer::GenericSlicer;
-    use crate::slicers::IdeaMakerSlicer::IdeaMakerSlicer;
-    use crate::slicers::KiriMotoSlicer::KiriMotoSlicer;
-    use crate::slicers::OrcaSlicer::OrcaSlicer;
-    use crate::slicers::PrusaSlicer::PrusaSlicer;
-    use crate::slicers::SuperSlicer::SuperSlicer;
+    use crate::slicers::cura_slicer::CuraSlicer;
+    use crate::slicers::generic_slicer::GenericSlicer;
+    use crate::slicers::idea_maker_slicer::IdeaMakerSlicer;
+    use crate::slicers::kiri_moto_slicer::KiriMotoSlicer;
+    use crate::slicers::orca_slicer::OrcaSlicer;
+    use crate::slicers::prusa_slicer::PrusaSlicer;
+    use crate::slicers::super_slicer::SuperSlicer;
 
     // Check first few KB for slicer signatures, matching TS's slicerFactory.ts substring window.
     // Slicing at a raw byte offset panics unless it lands on a char boundary, and a comment with

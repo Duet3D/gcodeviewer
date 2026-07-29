@@ -1,6 +1,6 @@
-use crate::gcode_line::{GCodeLine, GCodeLineBase};
+use crate::gcode_line::GCodeLine;
 use crate::processor_properties::ProcessorProperties;
-use crate::GCodeCommands::ProcessLine::process_line;
+use crate::gcode_commands::process_line::process_line;
 use crate::slicers::detect_slicer;
 use crate::{PositionData, ProgressCallback};
 use std::collections::HashMap;
@@ -123,7 +123,7 @@ impl FileProcessor {
                                 move_data.color.clone(),
                                 line_number,
                                 file_position,
-                                (file_position + line.len() as u32),
+                                file_position + line.len() as u32 ,
                                 move_data.tool as u32,
                                 move_data.is_support,
                             );
@@ -177,7 +177,7 @@ impl FileProcessor {
                                         self.properties.current_feature_color.clone(),
                                         line_number,
                                         file_position,
-                                        (file_position + line.len() as u32),
+                                        file_position + line.len() as u32 ,
                                         self.properties.current_tool.tool_number as u32,
                                         self.properties.current_is_support,
                                     );
@@ -196,7 +196,7 @@ impl FileProcessor {
                                 self.properties.current_feature_color.clone(),
                                 line_number,
                                 file_position,
-                                (file_position + line.len() as u32),
+                                file_position + line.len() as u32 ,
                                 self.properties.current_tool.tool_number as u32,
                                 self.properties.current_is_support,
                             );

@@ -1,6 +1,6 @@
 use crate::gcode_line::{GCodeLine, CommandData};
 use crate::processor_properties::ProcessorProperties;
-use crate::utils::{parse_number_fast, skip_whitespace};
+use crate::utils::skip_whitespace;
 
 /// Parse G28 (Auto Home) command
 /// G28: Home all axes, or specific axes if parameters provided
