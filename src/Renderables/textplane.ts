@@ -9,6 +9,7 @@ import { Color3 } from '@babylonjs/core/Maths/math.color'
 export function makeTextPlane(scene: Scene, text: string, textColor: string, backgroundColor: string, width: number, height: number, fontSize: number = 75): Mesh {
    const texture = new DynamicTexture(`textplane-texture-${text}`, { width: 400, height: 300 }, scene, true)
    texture.drawText(text, null, null, `bold ${fontSize}px sans-serif`, textColor, backgroundColor, true)
+   texture.hasAlpha = backgroundColor === 'transparent'
 
    const material = new StandardMaterial(`textplane-material-${text}`, scene)
    material.diffuseTexture = texture

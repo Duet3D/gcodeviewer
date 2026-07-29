@@ -135,9 +135,6 @@ export default class BuildObjects {
          const textPlane = makeTextPlane(this.scene, cancelObject.name, cancelObject.cancelled ? 'yellow' : 'white', 'transparent', 20, 8)
          const textPlaneMaterial = textPlane.material as StandardMaterial
          textPlaneMaterial.backFaceCulling = false
-         if (textPlaneMaterial.diffuseTexture) {
-            textPlaneMaterial.diffuseTexture.hasAlpha = true
-         }
          textPlane.billboardMode = Mesh.BILLBOARDMODE_ALL
          textPlane.position = new Vector3(0, this.getMaxHeight() / 2 + 10, 0)
          textPlane.isPickable = false
