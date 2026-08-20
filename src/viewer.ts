@@ -384,12 +384,12 @@ export default class Viewer {
    }
 
    // Default framing: the whole bed plus whatever is loaded on it, so nothing sticks out of frame,
-   // or in print mode just the printed geometry as long as something has been parsed
+   // or in print mode the loaded print as long as something has been parsed
    resetCamera(animate = false) {
       if (!this.orbitCamera || !this.bed) {
          return
       }
-      const printCorners = this.printCorners()
+      const printCorners = this.printCorners(this.defaultFraming === 'print')
       this.frameCorners(this.defaultFraming === 'print' && printCorners.length > 0 ? printCorners : this.bedCorners().concat(printCorners), animate)
    }
 
@@ -436,9 +436,9 @@ export default class Viewer {
 
    // The eight corners of the loaded print's bounding box, empty when nothing extruding has been
    // parsed. With unprinted geometry hidden only what has printed so far is on screen, so that is
-   // all the framing may count
-   private printCorners(): Vector3[] {
-      const bounds = this.processor.getExtrusionBounds(this.alphaMode || this.progressMode ? undefined : this.processor.renderedFilePosition)
+   // all the framing may count unless the caller asks for the whole file
+   private printCorners(wholeFile = false): Vector3[] {
+      const bounds = this.processor.getExtrusionBounds(wholeFile || this.alphaMode || this.progressMode ? undefined : this.processor.renderedFilePosition)
       if (!bounds) {
          return []
       }
