@@ -1058,18 +1058,24 @@ export default class Processor {
    }
 
    // World-space bounding box of the extruding moves, ignoring travels so a Z hop or a purge line
-   // off to the side cannot inflate it. `upToFilePosition` limits it to what has printed so far.
-   // Null before anything extruding has been parsed
+   // off to the side cannot inflate it. `upToFilePosition` limits it to what has printed so far,
+   // but never to less than the whole first layer - a job that is still heating up has nothing to
+   // frame otherwise, and the opening extrusions would collapse the box onto a single line. Null
+   // before anything extruding has been parsed
    getExtrusionBounds(upToFilePosition?: number): { min: Vector3; max: Vector3 } | null {
       let minX = Infinity, minY = Infinity, minZ = Infinity
       let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity
+      let firstLayerY = Infinity
       for (const filePosition of this.sortedPositions) {
-         if (upToFilePosition !== undefined && filePosition > upToFilePosition) {
-            break
-         }
          const position = this.positionTracker.get(filePosition)
          if (!position || !position.extruding) {
             continue
+         }
+         if (firstLayerY === Infinity) {
+            firstLayerY = position.y
+         }
+         if (upToFilePosition !== undefined && filePosition > upToFilePosition && position.y > firstLayerY) {
+            break
          }
          minX = Math.min(minX, position.x)
          maxX = Math.max(maxX, position.x)

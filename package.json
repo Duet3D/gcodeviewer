@@ -1,6 +1,6 @@
 {
   "name": "@duet3d/gcodeviewer",
-  "version": "3.7.0-beta.2",
+  "version": "3.7.0-beta.3",
   "description": "G-code viewer and processor library with Babylon.js rendering and a Rust/WASM parsing fast path",
   "repository": {
     "type": "git",
