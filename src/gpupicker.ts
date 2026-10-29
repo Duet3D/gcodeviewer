@@ -154,18 +154,20 @@ precision highp float;
         //to fragment
 
         flat out vec4 vPickColor;
-        flat out float vShow;
-        flat out float fTool;
 
 #include<instancesDeclaration>
 
 
 void main(void) {
    #include<instancesVertex>
+   // Unprinted and travel segments are culled whole outside the clip volume, see LineShaderMaterial
+   if ((filePosition > currentPosition) || (tool >= 255.0))
+   {
+      gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+      return;
+   }
    gl_Position = viewProjection * finalWorld * vec4(position, 1.0);
    vPickColor = vec4(pickColor, 1.0);
-   vShow = currentPosition - filePosition;
-   fTool = tool;
 }
 `
 
@@ -187,28 +189,19 @@ uniform vec4 u_color;
 
 
 flat in vec4 vPickColor;
-flat in float vShow;
-flat in float fTool;
 
 #include<helperFunctions>
 
 void main(void) {
-   if(vShow < 0.0f || fTool >= 255.0)
-   {
-      discard;
-   }
-   else
-   {
-      gl_FragColor = vPickColor;
-      #ifdef CONVERTTOLINEAR0
-      gl_FragColor = toLinearSpace(gl_FragColor);
-      #endif
-      #ifdef CONVERTTOGAMMA0
-      gl_FragColor = toGammaSpace(gl_FragColor);
-      #endif
-      #if defined(PREPASS)
-      gl_FragData[0] = gl_FragColor;
-      #endif
-   }
+   gl_FragColor = vPickColor;
+   #ifdef CONVERTTOLINEAR0
+   gl_FragColor = toLinearSpace(gl_FragColor);
+   #endif
+   #ifdef CONVERTTOGAMMA0
+   gl_FragColor = toGammaSpace(gl_FragColor);
+   #endif
+   #if defined(PREPASS)
+   gl_FragData[0] = gl_FragColor;
+   #endif
 }
 `

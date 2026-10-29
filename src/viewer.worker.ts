@@ -8,6 +8,8 @@ self.viewer = null //Main instance of the viewer.
 self.addEventListener('message', async (message) => {
    //console.info('Message received from main thread', message.data)
 
+   // Nearly every message changes what is on screen, and the render loop idles until told otherwise
+   self.viewer?.requestRender()
 
    switch (message.data.type) {
       case 'init':

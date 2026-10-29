@@ -931,6 +931,12 @@ export default class Processor {
       this.modelMaterial.forEach((m) => m.setTrailColor(color))
    }
 
+   // The fade is driven by the clock alone, so the scene has to be redrawn until the newest sample has aged out
+   isTrailFading(): boolean {
+      const newest = this.trailHistory[this.trailHistory.length - 1]
+      return (newest !== undefined) && (trailTime() - newest.time < this.effectiveTrailDuration())
+   }
+
    // Drops every sample, so nothing is left inside the trail window
    resetTrail() {
       this.trailHistory = []

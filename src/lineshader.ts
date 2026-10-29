@@ -73,7 +73,6 @@ export default class LineShaderMaterial {
 
    flat out vec3 vDiffColor;
    flat out float fIsPerimeter;
-   flat out float bDiscard;
    flat out float fShow;
    flat out float focused;
 
@@ -108,7 +107,7 @@ export default class LineShaderMaterial {
       #include<instancesVertex>
 
       fIsPerimeter = isPerimeter;
-      bDiscard = 0.;
+      float bDiscard = 0.;
 
       // Non-perimeter geometry (infill, travels) is dropped entirely in perimeter-only mode
       if(perimeterOnly && isPerimeter < 1.0)
@@ -197,6 +196,15 @@ export default class LineShaderMaterial {
             }
          }
 
+         // All vertices of a segment share its discard state, so parking them outside the clip volume
+         // drops the segment before rasterisation. A fragment discard would rasterise it regardless
+         // and turn off early depth testing for the whole draw
+         if (bDiscard > 0.0)
+         {
+            gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+            return;
+         }
+
          //Final Results
          vec4 worldPos = finalWorld * vec4(position, 1.0);
          #include<clipPlaneVertex>
@@ -230,17 +238,12 @@ export default class LineShaderMaterial {
 
    flat in vec3 vDiffColor;
    flat in float fIsPerimeter;
-   flat in float bDiscard;
    flat in float fShow;
    flat in float focused;
    const vec3 lowerBound = vec3(0.3,0.3,0.3);
 
    void main(){
          #include<clipPlaneFragment>
-
-         if( bDiscard > 0.0) {
-            discard;
-         }
 
          vec4 diffuseColor = vec4(vDiffColor, 1);
 

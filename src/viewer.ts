@@ -76,6 +76,10 @@ export default class Viewer {
    // Mirrored from the main thread via visibilitychange - the worker's faked document has no
    // usable `hidden` property, so without this the render loop burns GPU in background tabs
    documentHidden = false
+   // Frames are drawn only while something on screen can change, so an idle viewer costs no GPU time
+   private renderRequested = true
+   // A counter, since a second file can start loading before the first one has finished
+   private pendingLoads = 0
 
    // getBoundingInfo()
    rect = {
@@ -170,7 +174,9 @@ export default class Viewer {
          this.offscreenCanvas.width,
          this.offscreenCanvas.height,
       )
-      
+      // A pick readback can move the hover highlight, which only shows on the following frame
+      this.processor.gpuPicker.renderTarget.onAfterRenderObservable.add(() => this.requestRender())
+
       // Initialize nozzle
       this.processor.initNozzle(0.4)
 
@@ -178,8 +184,13 @@ export default class Viewer {
       this.orbitCamera = new ArcRotateCamera('Camera', Math.PI / 2, 2.356194, 15, new Vector3(0, 0, 0), this.scene)
       this.orbitCamera.invertRotation = false
       this.orbitCamera.attachControl(this.offscreenCanvas, true)
-      // Camera movement changes what sits under the (possibly resting) pointer
-      this.orbitCamera.onViewMatrixChangedObservable.add(() => this.processor.gpuPicker.requestPick())
+      // Camera movement changes what sits under the (possibly resting) pointer. The view matrix also
+      // keeps changing for as long as held keys or an inertia glide move the camera, so each change
+      // requests the next frame
+      this.orbitCamera.onViewMatrixChangedObservable.add(() => {
+         this.processor.gpuPicker.requestPick()
+         this.requestRender()
+      })
       this.orbitCamera.maxZ = 100000
       this.orbitCamera.lowerRadiusLimit = 5
       this.orbitCamera.setPosition(new Vector3(150, 100, 0))
@@ -262,16 +273,26 @@ export default class Viewer {
             return
          }
 
+         if (!this.needsRender()) {
+            return
+         }
+         // Cleared before rendering, so requests raised during the frame carry over to the next one
+         this.renderRequested = false
+
          this.pointLight.position = this.orbitCamera?.position ?? new Vector3(0, 0, 0)
-         
+
          // Update nozzle animations
          const nozzle = this.processor.getNozzle()
          if (nozzle) {
             nozzle.update()
          }
-         
+
          this.scene?.render()
          this.viewBox?.render()
+         // Shaders compile asynchronously and Babylon skips meshes whose effects are not ready yet
+         if (!this.scene?.isReady()) {
+            this.requestRender()
+         }
          this.updateCameraDefaultState()
          this.lastFrameUpdate = Date.now()
       })
@@ -312,6 +333,15 @@ export default class Viewer {
       // method. Signal the main thread that configuration messages (build volume, bed, tools,
       // camera) can now be applied without racing an undefined scene
       this.worker.postMessage({ type: 'ready' })
+   }
+
+   requestRender() {
+      this.renderRequested = true
+   }
+
+   // Besides explicit requests, these change the picture by themselves from one frame to the next
+   private needsRender(): boolean {
+      return this.renderRequested || (this.pendingLoads > 0) || ((this.scene?.animatables.length ?? 0) > 0) || this.processor.isNozzleAnimationPlaying() || (this.processor.getNozzle()?.isCurrentlyAnimating() ?? false) || this.processor.isTrailFading()
    }
 
    // Assigning target normally rebuilds alpha/beta/radius from the camera position, which would undo
@@ -825,13 +855,19 @@ export default class Viewer {
    }
 
    async loadFile(file) {
-      await this.processor.loadFile(file)
-      // Workplace offsets are only known once the file has been parsed
-      this.workplace?.render(this.processor.processorProperties.workplaceOffsets)
+      // Meshes are built across several event loop turns, so keep drawing until the last one is in
+      this.pendingLoads++
+      try {
+         await this.processor.loadFile(file)
+         // Workplace offsets are only known once the file has been parsed
+         this.workplace?.render(this.processor.processorProperties.workplaceOffsets)
+      } finally {
+         this.pendingLoads--
+         this.requestRender()
+      }
    }
 
    setMaxFPS(fps) {
-      console.log(fps)
       if (fps <= 0) fps = 1
       this.maxFrameRate = 1000 / fps
    }
